@@ -113,6 +113,15 @@ export default class WallpaperBridge extends Extension {
         window.set_type(Meta.WindowType.DESKTOP);
         window.hide_from_window_list();
         window.stick();
+        // Shell hides its panel when Mutter considers the primary monitor
+        // fullscreen. A monitor-sized xdg-toplevel must remain a desktop even
+        // when pointer focus moves to a window on another monitor.
+        record.signals.push(window.connect('notify::fullscreen', () => {
+            if (window.is_fullscreen())
+                window.unmake_fullscreen();
+        }));
+        if (window.is_fullscreen())
+            window.unmake_fullscreen();
         this._place(window, registration);
         window.lower();
         this._refreshMirrors();

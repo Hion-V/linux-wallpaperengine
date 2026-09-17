@@ -57,6 +57,8 @@ function setup() {
             set_type(t) { this.type = t; }, hide_from_window_list() { this.hidden = true; },
             stick() { this.sticky = true; }, move_to_monitor(i) { this.monitor = i; },
             move_resize_frame(_user, ...rect) { this.rect = rect; }, lower() { this.lowered = true; },
+            is_fullscreen() { return !!this.fullscreen; },
+            unmake_fullscreen() { this.fullscreen = false; this.unfullscreened = true; },
             delete() { this.closed = true; }});
         display.emit('window-created', w);
         return w;
@@ -77,6 +79,15 @@ test('registered Wayland window becomes a desktop on its full monitor', () => {
     assert.equal(w.handlers.size, 0);
     assert.equal(t.display.handlers.size, 0);
     assert.equal(t.layout.handlers.size, 0);
+});
+test('wallpaper cannot retain fullscreen state and hide Shell chrome', () => {
+    const t = setup();
+    const w = t.window(t.register().token);
+    w.fullscreen = true;
+    w.emit('notify::fullscreen');
+    assert.equal(w.fullscreen, false);
+    assert.equal(w.unfullscreened, true);
+    t.bridge.disable();
 });
 test('rejects unknown connectors, foreign PIDs, unknown tokens and token reuse', () => {
     const t = setup();
