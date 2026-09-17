@@ -19,6 +19,11 @@ class Actor {
     add_child(child) { this.insert_child_at_index(child, this.children.length); }
     insert_child_at_index(child, index) { this.children.splice(index, 0, child); child.parent = this; }
     get_children() { return [...this.children]; }
+    get_first_child() { return this.children[0]; }
+    get_source() { return this.source; }
+    get_width() { return this.width; }
+    get_height() { return this.height; }
+    allocate(box) { this.allocation = box; }
     set_child_above_sibling(child) {
         this.children.splice(this.children.indexOf(child), 1);
         this.children.push(child);
@@ -74,7 +79,10 @@ function setup() {
         {x: 0, y: 0, width: 1024, height: 768},
     ];
     const context = vm.createContext({
-        Clutter: {Clone: Actor}, Cogl: {}, GObject: {registerClass: c => c},
+        Clutter: {Clone: Actor, Actor, LayoutManager: class {}, ActorBox: class {
+            set_origin(x, y) { this.x = x; this.y = y; }
+            set_size(width, height) { this.width = width; this.height = height; }
+        }}, Cogl: {}, GObject: {registerClass: c => c},
         Shell: {GLSLEffect: Effect}, InjectionManager,
         WorkspaceBackground: Background, WorkspaceThumbnail: Thumbnail,
         Main: {layoutManager: {overviewGroup: group, monitors,
@@ -104,8 +112,8 @@ test('existing and new workspaces select the correct monitor and reuse live sour
     assert.deepEqual(clones[2].position, [0, 0]);
     assert.deepEqual(clones[2].size, [1024, 768]);
     assert.equal(thumbnail._contents.children[0], clones[2]);
-    assert.equal(background._backgroundGroup.children.at(-1), clones[1]);
-    assert.deepEqual(clones[1].effect.uniforms.get('wallpaper_bounds'), [0, 32, 1024, 736]);
+    assert.equal(background._backgroundGroup.children.at(-1), records[1].container);
+    assert.deepEqual(records[1].effect.uniforms.get('wallpaper_bounds'), [0, 32, 1024, 736]);
     t.mirrors.destroy();
 });
 
@@ -133,7 +141,7 @@ test('background changes preserve stacking and disable restores hooks and discon
     const clone = t.mirrors._targets.get(t.existing).clone;
     t.existing._backgroundGroup.add_child(new Actor());
     t.existing._bgManager.emit('changed');
-    assert.equal(t.existing._backgroundGroup.children.at(-1), clone);
+    assert.equal(t.existing._backgroundGroup.children.at(-1), t.mirrors._targets.get(t.existing).container);
     t.mirrors.destroy();
     assert.equal(t.Background.prototype._init, t.originalBackground);
     assert.equal(t.Thumbnail.prototype._init, t.originalThumbnail);
@@ -155,5 +163,29 @@ test('destroying a workspace removes only its clones and signal connections', ()
     assert.ok(clone.destroyed);
     assert.equal(t.mirrors._targets.size, 1);
     assert.equal(source.signals.size, 1);
+    t.mirrors.destroy();
+});
+
+
+test('large previews preserve source aspect ratio and crop centrally at every allocation', () => {
+    const t = setup();
+    const source = new Actor({width: 1920, height: 1080});
+    t.sources.set(0, source); t.mirrors.refresh();
+    const {container, clone, effect} = t.mirrors._targets.get(t.existing);
+    assert.ok(container.clip_to_allocation);
+    assert.equal(container.effect, effect); // Rounded clipping follows the card, not the oversized clone.
+    for (const [width, height] of [[1200, 400], [400, 800], [960, 540], [0, 0]]) {
+        container.layout_manager.vfunc_allocate(container, {
+            get_width: () => width, get_height: () => height,
+        });
+        const box = clone.allocation;
+        assert.ok(Math.abs(box.width / 1920 - box.height / 1080) < 1e-9);
+        assert.ok(box.width >= width && box.height >= height);
+        assert.ok(Math.abs(box.x * 2 + box.width - width) < 1e-9);
+        assert.ok(Math.abs(box.y * 2 + box.height - height) < 1e-9);
+    }
+    source.width = 1080; source.height = 1920;
+    container.layout_manager.vfunc_allocate(container, {get_width: () => 1200, get_height: () => 400});
+    assert.ok(Math.abs(clone.allocation.width / 1080 - clone.allocation.height / 1920) < 1e-9);
     t.mirrors.destroy();
 });

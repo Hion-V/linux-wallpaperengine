@@ -5,6 +5,7 @@ Usage: python3 tests/gnome-headless.py /path/to/linux-wallpaperengine /path/to/f
 Requires gnome-shell, dconf, gdbus and dbus-run-session on PATH. Uses temporary
 XDG directories, two virtual monitors, and a generated video (no Steam assets).
 """
+import argparse
 import ast
 import json
 import os
@@ -16,6 +17,7 @@ import tempfile
 import time
 
 UUID = 'linux-wallpaperengine@almamu.github.io'
+BLUR_UUID = 'blur-my-shell@aunetx'
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -53,8 +55,10 @@ def wait_for(fn, timeout=20):
 
 def inside(renderer, directory):
     directory = Path(directory)
+    use_blur = os.environ.get('LWE_TEST_BLUR_MY_SHELL') == '1'
+    extensions = [BLUR_UUID, UUID] if use_blur else [UUID]
     subprocess.run(['dconf', 'load', '/'], input=f'''[org/gnome/shell]
-enabled-extensions=['{UUID}']
+enabled-extensions={extensions}
 disable-user-extensions=false
 welcome-dialog-last-shown-version='50.4'
 
@@ -64,6 +68,21 @@ workspaces-only-on-primary=false
 
 [org/gnome/desktop/wm/preferences]
 num-workspaces=2
+
+[org/gnome/shell/extensions/blur-my-shell/overview]
+blur=true
+
+[org/gnome/shell/extensions/blur-my-shell/panel]
+blur=false
+
+[org/gnome/shell/extensions/blur-my-shell/dash-to-dock]
+blur=false
+
+[org/gnome/shell/extensions/blur-my-shell/screenshot]
+blur=false
+
+[org/gnome/shell/extensions/blur-my-shell/lockscreen]
+blur=false
 ''', text=True, check=True)
     with (directory / 'shell.log').open('w') as shell_log, (directory / 'renderer.log').open('w') as renderer_log:
         shell = subprocess.Popen([
@@ -108,6 +127,16 @@ num-workspaces=2
             assert any(m['thumbnail'] for m in mirrors), mirrors
             assert all(m['live'] for m in mirrors), mirrors
             assert {m['monitor'] for m in mirrors} == {0, 1}, mirrors
+            for mirror in mirrors:
+                if not mirror['thumbnail']:
+                    sw, sh = mirror['sourceSize']
+                    cw, ch = mirror['cloneSize']
+                    assert abs(cw / sw - ch / sh) < 0.003, f'Nonuniform preview scaling: {mirror}'
+            print('PASS: workspace previews scale uniformly without squashing')
+            if use_blur:
+                assert len(overview['blurMirrors']) == 2, overview
+                assert all(m['live'] and m['effects'] > 0 for m in overview['blurMirrors']), overview
+                print('PASS: live wallpaper inside Blur My Shell effect pipelines on both monitors')
             for name in ['overview', 'overview-next-frame']:
                 time.sleep(0.4)
                 call('/org/gnome/Shell/Screenshot', 'org.gnome.Shell.Screenshot.Screenshot',
@@ -125,6 +154,26 @@ num-workspaces=2
                 ]) for name in ['overview', 'overview-next-frame']]
                 assert frames[0] != frames[1], f'Wallpaper frozen in overview on monitor {monitor_index}'
             print('PASS: animated wallpaper in workspace previews and thumbnails on both monitors')
+            if use_blur:
+                for name in ['blur-backdrop', 'blur-backdrop-next-frame']:
+                    action('hide-cards')
+                    time.sleep(0.4)
+                    call('/org/gnome/Shell/Screenshot', 'org.gnome.Shell.Screenshot.Screenshot',
+                         'false', 'false', str(directory / f'{name}.png'))
+                # With workspace cards hidden only the blurred backdrop remains.
+                for monitor_index, (x, y, width, height) in enumerate(overview['monitors']):
+                    crop = f'crop={width // 2}:{height // 2}:{x + width // 4}:{y + height // 4}'
+                    frames = [subprocess.check_output([
+                        os.environ['LWE_TEST_FFMPEG'], '-v', 'error', '-i', str(directory / f'{name}.png'),
+                        '-vf', crop, '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-',
+                    ]) for name in ['blur-backdrop', 'blur-backdrop-next-frame']]
+                    assert frames[0] != frames[1], f'Blurred wallpaper frozen on monitor {monitor_index}'
+                action('show-cards')
+                call('/org/gnome/Shell', 'org.gnome.Shell.Extensions.DisableExtension', BLUR_UUID)
+                wait_for(lambda: not state()['blurMirrors'])
+                call('/org/gnome/Shell', 'org.gnome.Shell.Extensions.EnableExtension', BLUR_UUID)
+                wait_for(lambda: len(state()['blurMirrors']) == 2 and all(m['live'] for m in state()['blurMirrors']))
+                print('PASS: blurred backdrop animates and handles Blur My Shell disable/re-enable')
             action('add-workspace')
             time.sleep(1)
             assert len(state()['mirrors']) > len(mirrors), 'New workspace has no wallpaper'
@@ -144,9 +193,13 @@ num-workspaces=2
             app.terminate()
             app.wait(timeout=10)
             wait_for(lambda: not state()['windows'] and not any(m['live'] for m in state()['mirrors']))
+            if use_blur:
+                wait_for(lambda: not any(m['live'] for m in state()['blurMirrors']))
             app = subprocess.Popen(renderer_args, stdout=renderer_log, stderr=subprocess.STDOUT,
                 env={**os.environ, 'WAYLAND_DISPLAY': 'lwe-test', 'SDL_AUDIODRIVER': 'dummy'})
             wait_for(lambda: len(state()['windows']) == 2 and all(m['live'] for m in state()['mirrors']))
+            if use_blur:
+                wait_for(lambda: all(m['live'] for m in state()['blurMirrors']))
             print('PASS: background changes and renderer restart while Activities remains open')
             call('/org/gnome/Shell', 'org.gnome.Shell.Extensions.DisableExtension', UUID)
             assert app.wait(timeout=10) == 0, 'Renderer did not exit cleanly on extension disable'
@@ -163,15 +216,20 @@ def main():
     if len(sys.argv) == 4 and sys.argv[1] == '--inside':
         inside(sys.argv[2], sys.argv[3])
         return
-    if len(sys.argv) != 3:
-        raise SystemExit(__doc__)
-    renderer, ffmpeg = map(os.path.abspath, sys.argv[1:])
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('renderer')
+    parser.add_argument('ffmpeg')
+    parser.add_argument('--blur-my-shell', type=Path, help='Installed Blur My Shell extension directory')
+    args = parser.parse_args()
+    renderer, ffmpeg = map(os.path.abspath, [args.renderer, args.ffmpeg])
     directory = Path(tempfile.mkdtemp(prefix='lwe-gnome-integration-'))
     print(f'Test artifacts: {directory}', flush=True)
     for name in ['data', 'config', 'cache', 'runtime', 'assets', 'wallpaper']:
         (directory / name).mkdir(mode=0o700)
     extension = directory / 'data/gnome-shell/extensions' / UUID
     shutil.copytree(ROOT / 'gnome-extension', extension)
+    if args.blur_my_shell:
+        shutil.copytree(args.blur_my_shell, extension.parent / BLUR_UUID)
     # Test instrumentation exists only in the temporary copy. The shipped bridge
     # does not export diagnostics or enable Shell's unsafe screenshot access.
     source = (extension / 'extension.js').read_text()
@@ -183,10 +241,15 @@ def main():
         const rect = r => [r.x, r.y, r.width, r.height];
         return JSON.stringify({ready: !Main.layoutManager._startingUp,
             overview: Main.overview.visible,
+            blurMirrors: [...this._blurMyShell._widgets.values()].map(r => ({
+                live: !!r.clone?.get_source(), effects: r.widget.get_effects().length,
+            })),
             mirrors: [...this._overview._targets.values()].map(r => ({
                 thumbnail: r.thumbnail, live: !!r.clone?.get_source(),
                 monitor: r.thumbnail ? r.actor.monitorIndex : r.actor._monitorIndex,
                 rect: [...r.actor.get_transformed_position(), ...r.actor.get_transformed_size()],
+                sourceSize: r.source ? [r.source.get_width(), r.source.get_height()] : null,
+                cloneSize: r.clone ? r.clone.get_transformed_size() : null,
             })),
             monitors: Main.layoutManager.monitors.map(rect),
             windows: [...this._windows.entries()].filter(([, r]) => r.registration).map(([w]) => ({
@@ -196,6 +259,9 @@ def main():
     }
     TestAction(action) {
         if (action === 'show') Main.overview.show();
+        if (action === 'hide-cards' || action === 'show-cards') {
+            for (const r of this._overview._targets.values()) r.actor.opacity = action === 'hide-cards' ? 0 : 255;
+        }
         if (action === 'hide') Main.overview.hide();
         if (action === 'add-workspace') global.workspace_manager.append_new_workspace(false, global.get_current_time());
         if (action === 'change-background') {
@@ -212,7 +278,7 @@ def main():
     }))
     subprocess.run([ffmpeg, '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=30',
         '-t', '2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', str(directory / 'wallpaper/test.mp4')], check=True)
-    env = {**os.environ, 'LWE_TEST_FFMPEG': ffmpeg, **{f'XDG_{key}': str(directory / value) for key, value in {
+    env = {**os.environ, 'LWE_TEST_FFMPEG': ffmpeg, 'LWE_TEST_BLUR_MY_SHELL': '1' if args.blur_my_shell else '0', **{f'XDG_{key}': str(directory / value) for key, value in {
         'DATA_HOME': 'data', 'CONFIG_HOME': 'config', 'CACHE_HOME': 'cache', 'RUNTIME_DIR': 'runtime',
     }.items()}}
     subprocess.run(['dbus-run-session', '--', sys.executable, str(Path(__file__).resolve()),

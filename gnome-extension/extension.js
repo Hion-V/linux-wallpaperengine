@@ -4,6 +4,7 @@ import Meta from 'gi://Meta';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {OverviewWallpapers} from './overview.js';
+import {BlurMyShellWallpapers} from './blurMyShell.js';
 
 const IFACE = `<node>
   <interface name="io.github.almamu.LinuxWallpaperEngine">
@@ -19,13 +20,15 @@ export default class WallpaperBridge extends Extension {
     enable() {
         this._registrations = new Map();
         this._windows = new Map();
-        this._overview = new OverviewWallpapers(index => {
+        const sourceForMonitor = index => {
             for (const registration of this._registrations.values()) {
                 if (registration.window && this._monitor(registration.connector) === index)
                     return registration.window.get_compositor_private();
             }
             return null;
-        });
+        };
+        this._overview = new OverviewWallpapers(sourceForMonitor);
+        this._blurMyShell = new BlurMyShellWallpapers(sourceForMonitor);
         this._cancellable = new Gio.Cancellable();
         this._bus = Gio.DBus.session;
         this._export = Gio.DBusExportedObject.wrapJSObject(IFACE, this);
@@ -37,7 +40,7 @@ export default class WallpaperBridge extends Extension {
                 if (record.registration)
                     this._place(window, record.registration);
             }
-            this._overview.refresh();
+            this._refreshMirrors();
         });
     }
 
@@ -68,6 +71,11 @@ export default class WallpaperBridge extends Extension {
                     invocation.return_dbus_error('io.github.almamu.RegistrationFailed', error.message);
                 }
             });
+    }
+
+    _refreshMirrors() {
+        this._overview?.refresh();
+        this._blurMyShell?.refresh();
     }
 
     _monitor(connector) {
@@ -107,11 +115,11 @@ export default class WallpaperBridge extends Extension {
         window.stick();
         this._place(window, registration);
         window.lower();
-        this._overview.refresh();
+        this._refreshMirrors();
         record.signals.push(window.connect('shown', () => {
             this._place(window, registration);
             window.lower();
-            this._overview.refresh();
+            this._refreshMirrors();
         }));
     }
 
@@ -131,13 +139,15 @@ export default class WallpaperBridge extends Extension {
         if (!registration)
             return;
         this._registrations.delete(token);
-        this._overview?.refresh();
+        this._refreshMirrors();
         Gio.bus_unwatch_name(registration.watch);
         if (close && registration.window)
             registration.window.delete(global.get_current_time());
     }
 
     disable() {
+        this._blurMyShell.destroy();
+        this._blurMyShell = null;
         this._overview.destroy();
         this._overview = null;
         this._cancellable.cancel();

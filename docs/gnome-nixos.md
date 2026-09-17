@@ -120,7 +120,9 @@ The desktop surface stays in Mutter's window group. In Activities, live Clutter
 clones supply each monitor's wallpaper to the large workspace previews and the
 small thumbnail strip, behind application previews. Scoped, reversible hooks on
 GNOME 50's overview actor constructors also cover newly created workspaces.
-Clones follow GNOME's work-area cropping and rounded preview corners, and are
+Large previews use uniform scaling with centered cropping, preserving the
+wallpaper's aspect ratio as the card changes size. Clones follow GNOME's work-area
+cropping and rounded preview corners, and are
 removed when the renderer stops or the extension is disabled. Monitors without a
 running wallpaper retain their normal background. The renderer submits an
 empty input region so clicks pass through to GNOME or desktop icons.
@@ -142,6 +144,24 @@ Current limitations:
 - GNOME bridge surfaces always use the desktop layer; `--layer` does not raise them.
 - Integer Wayland buffer scaling is used; fractional scaling may supersample.
 
+## Blur My Shell
+
+With Blur My Shell v72 enabled, its Activities backdrop also uses the live
+wallpaper. The bridge supplies each monitor's wallpaper inside Blur My Shell's
+existing overview effect widget, so your blur pipeline, brightness, and other
+effect settings still apply. No Blur My Shell files or settings are changed.
+
+The integration handles either extension being enabled first, pipeline/background
+recreation, and renderer restarts. Removing a wallpaper or disabling the bridge
+reveals Blur My Shell's original image background again. If Blur My Shell is not
+installed or its overview blur is disabled, the adapter does nothing.
+
+This adapter targets the actor structure used by v72; future Blur My Shell
+versions may need compatibility updates. Only its Activities backdrop is covered,
+not its separate panel, lock-screen, or workspace-switch animation backgrounds.
+Blurring live frames uses more GPU time while Activities is visible than blurring
+a static image.
+
 ## Validation and troubleshooting
 
 ```sh
@@ -150,6 +170,7 @@ nix flake check path:.
 # Or run the bridge lifecycle tests directly:
 node tests/gnome-bridge.mjs
 node tests/gnome-overview.mjs
+node tests/gnome-blur-my-shell.mjs
 ```
 
 A missing/disabled extension produces a bridge registration error before the
@@ -179,10 +200,20 @@ extension disable. It writes logs and the
 screenshot to a reported temporary directory. Test-only diagnostics and screenshot
 access are injected into the temporary extension copy, never the installed one.
 
+To include Blur My Shell in the headless test, pass its installed directory:
+
+```sh
+python3 tests/gnome-headless.py /tmp/lwe-build/bin/linux-wallpaperengine /path/to/ffmpeg \
+  --blur-my-shell ~/.local/share/gnome-shell/extensions/blur-my-shell@aunetx
+```
+
+The test copies it into the temporary session and checks the blurred backdrop's
+animation, extension toggling, and image fallback when the renderer stops.
+
 ### Updating the extension
 
 After rebuilding your NixOS configuration with this checkout, log out and back in
-to load extension version 2, then start the wallpaper renderer again. If you use
+to load extension version 3, then start the wallpaper renderer again. If you use
 the local symlink installation, rebuild `path:.#gnome-extension` and update the
 symlink to the new output first. GNOME caches JavaScript modules, so toggling the
 extension alone is not enough to load changed code.

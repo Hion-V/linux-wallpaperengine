@@ -38,6 +38,35 @@ class WallpaperOverviewClip extends Shell.GLSLEffect {
     }
 });
 
+// The workspace card can have a different aspect ratio from its monitor (for
+// example when the search field, dash, and thumbnails take up vertical space).
+// Allocate the source at one uniform scale, centered and cropped to fill it.
+const PreviewLayout = GObject.registerClass(
+class WallpaperPreviewLayout extends Clutter.LayoutManager {
+    vfunc_get_preferred_width() { return [0, 0]; }
+    vfunc_get_preferred_height() { return [0, 0]; }
+
+    vfunc_allocate(container, box) {
+        const clone = container.get_first_child();
+        const source = clone?.get_source();
+        if (!source)
+            return;
+        const sourceWidth = source.get_width();
+        const sourceHeight = source.get_height();
+        if (sourceWidth <= 0 || sourceHeight <= 0)
+            return;
+        const width = box.get_width();
+        const height = box.get_height();
+        const scale = Math.max(width / sourceWidth, height / sourceHeight);
+        const scaledWidth = sourceWidth * scale;
+        const scaledHeight = sourceHeight * scale;
+        const childBox = new Clutter.ActorBox();
+        childBox.set_origin((width - scaledWidth) / 2, (height - scaledHeight) / 2);
+        childBox.set_size(scaledWidth, scaledHeight);
+        clone.allocate(childBox);
+    }
+});
+
 export class OverviewWallpapers {
     constructor(sourceForMonitor) {
         this._sourceForMonitor = sourceForMonitor;
@@ -92,6 +121,8 @@ export class OverviewWallpapers {
         record.sourceDestroy = 0;
         record.source = null;
         record.clone?.destroy();
+        record.container?.destroy();
+        record.container = null;
         record.clone = null;
         record.effect = null;
     }
@@ -107,15 +138,19 @@ export class OverviewWallpapers {
             return;
         if (!record.clone) {
             record.source = source;
-            record.clone = new Clutter.Clone({source, reactive: false,
-                x_expand: !thumbnail, y_expand: !thumbnail});
+            record.clone = new Clutter.Clone({source, reactive: false});
             record.sourceDestroy = source.connect('destroy', () => this._clearClone(record));
             if (thumbnail) {
                 actor._contents.insert_child_at_index(record.clone, 0);
             } else {
                 record.effect = new OverviewClip();
-                record.clone.add_effect(record.effect);
-                actor._backgroundGroup.add_child(record.clone);
+                record.container = new Clutter.Actor({
+                    reactive: false, x_expand: true, y_expand: true,
+                    clip_to_allocation: true, layout_manager: new PreviewLayout(),
+                });
+                record.container.add_child(record.clone);
+                record.container.add_effect(record.effect);
+                actor._backgroundGroup.add_child(record.container);
             }
         }
         if (thumbnail) {
@@ -126,7 +161,7 @@ export class OverviewWallpapers {
             record.effect.update(monitor, Main.layoutManager.getWorkAreaForMonitor(index),
                 actor._bgManager.backgroundActor.content.rounded_clip_radius);
             // A settings change may have added a new background above our clone.
-            actor._backgroundGroup.set_child_above_sibling(record.clone, null);
+            actor._backgroundGroup.set_child_above_sibling(record.container, null);
         }
     }
 

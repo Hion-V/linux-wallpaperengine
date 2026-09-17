@@ -52,12 +52,12 @@
           });
           extension = pkgs.stdenvNoCC.mkDerivation {
             pname = "gnome-shell-extension-linux-wallpaperengine";
-            version = "2";
+            version = "3";
             src = ./gnome-extension;
             dontBuild = true;
             installPhase = ''
               mkdir -p $out/share/gnome-shell/extensions/linux-wallpaperengine@almamu.github.io
-              cp extension.js overview.js metadata.json $out/share/gnome-shell/extensions/linux-wallpaperengine@almamu.github.io/
+              cp extension.js overview.js blurMyShell.js metadata.json $out/share/gnome-shell/extensions/linux-wallpaperengine@almamu.github.io/
             '';
             passthru.extensionUuid = "linux-wallpaperengine@almamu.github.io";
             meta = { platforms = systems; license = pkgs.lib.licenses.gpl3Plus; };
@@ -78,8 +78,10 @@
             mkdir tests
             cp ${./tests/gnome-bridge.mjs} tests/gnome-bridge.mjs
             cp ${./tests/gnome-overview.mjs} tests/gnome-overview.mjs
+            cp ${./tests/gnome-blur-my-shell.mjs} tests/gnome-blur-my-shell.mjs
             node tests/gnome-bridge.mjs
             node tests/gnome-overview.mjs
+            node tests/gnome-blur-my-shell.mjs
             touch $out
           '';
           extension = self.packages.${system}.gnome-extension;
