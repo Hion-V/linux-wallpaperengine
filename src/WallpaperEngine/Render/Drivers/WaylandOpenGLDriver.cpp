@@ -28,6 +28,7 @@ static void handlePointerEnter (
 ) {
     const auto driver = static_cast<WaylandOpenGLDriver*> (data);
     const auto viewport = driver->surfaceToViewport (surface);
+    if (!viewport || !viewport->cursorSurface || !viewport->pointer) return;
     driver->viewportInFocus = viewport;
     wl_surface_set_buffer_scale (viewport->cursorSurface, viewport->scale);
     wl_surface_attach (viewport->cursorSurface, wl_cursor_image_get_buffer (viewport->pointer->images[0]), 0, 0);
@@ -100,6 +101,9 @@ static void handleCapabilities (void* data, wl_seat* wl_seat, uint32_t capabilit
 
 constexpr struct wl_seat_listener seatListener = { .capabilities = handleCapabilities };
 
+static void xdgPing (void*, xdg_wm_base* shell, uint32_t serial) { xdg_wm_base_pong (shell, serial); }
+constexpr xdg_wm_base_listener xdgShellListener = { .ping = xdgPing };
+
 static void
 handleGlobal (void* data, struct wl_registry* registry, uint32_t name, const char* interface, uint32_t version) {
     const auto driver = static_cast<WaylandOpenGLDriver*> (data);
@@ -117,6 +121,10 @@ handleGlobal (void* data, struct wl_registry* registry, uint32_t name, const cha
     } else if (strcmp (interface, zwlr_layer_shell_v1_interface.name) == 0) {
 	driver->getWaylandContext ()->layerShell
 	    = static_cast<zwlr_layer_shell_v1*> (wl_registry_bind (registry, name, &zwlr_layer_shell_v1_interface, 1));
+    } else if (strcmp (interface, xdg_wm_base_interface.name) == 0) {
+	driver->getWaylandContext ()->xdgShell = static_cast<xdg_wm_base*> (
+	    wl_registry_bind (registry, name, &xdg_wm_base_interface, 1));
+	xdg_wm_base_add_listener (driver->getWaylandContext ()->xdgShell, &xdgShellListener, driver);
     } else if (strcmp (interface, wl_seat_interface.name) == 0) {
 	driver->getWaylandContext ()->seat
 	    = static_cast<wl_seat*> (wl_registry_bind (registry, name, &wl_seat_interface, 1));
@@ -232,7 +240,17 @@ void WaylandOpenGLDriver::finishEGL () const {
 }
 
 void WaylandOpenGLDriver::onLayerClose (Output::WaylandOutputViewport* viewport) {
-    sLog.error ("Compositor closed our LS, freeing data...");
+    // Defer deletion until dispatch completes; configure/setup callbacks may still
+    // reference this viewport.
+    viewport->closed = true;
+}
+
+void WaylandOpenGLDriver::destroyViewport (Output::WaylandOutputViewport* viewport) {
+
+    if (viewportInFocus == viewport) viewportInFocus = nullptr;
+    if (viewport->frameCallback) wl_callback_destroy (viewport->frameCallback);
+    if (viewport->xdgToplevel) xdg_toplevel_destroy (viewport->xdgToplevel);
+    if (viewport->xdgSurface) xdg_surface_destroy (viewport->xdgSurface);
 
     if (viewport->eglSurface) {
 	eglDestroySurface (m_eglContext.display, viewport->eglSurface);
@@ -255,6 +273,9 @@ void WaylandOpenGLDriver::onLayerClose (Output::WaylandOutputViewport* viewport)
 	wl_surface_destroy (viewport->surface);
     }
 
+    if (viewport->cursorSurface) wl_surface_destroy (viewport->cursorSurface);
+    if (viewport->output) wl_output_destroy (viewport->output);
+
     // remove the output from the list
     std::erase (this->m_screens, viewport);
 
@@ -263,6 +284,7 @@ void WaylandOpenGLDriver::onLayerClose (Output::WaylandOutputViewport* viewport)
 
     // finally free memory used by the viewport
     delete viewport;
+    if (this->getOutput ().getViewports ().empty ()) m_requestedExit = true;
 }
 
 WaylandOpenGLDriver::WaylandOpenGLDriver (ApplicationContext& context, WallpaperApplication& app) :
@@ -287,9 +309,13 @@ void WaylandOpenGLDriver::initWaylandRegistry () {
     wl_display_dispatch (m_waylandContext.display);
     wl_display_roundtrip (m_waylandContext.display);
 
-    if (!m_waylandContext.compositor || !m_waylandContext.shm || !m_waylandContext.layerShell
+    if (!m_waylandContext.compositor || !m_waylandContext.shm || (!m_waylandContext.layerShell && !m_waylandContext.xdgShell)
 	|| this->m_screens.empty ()) {
 	sLog.exception ("Failed to bind to required interfaces");
+    }
+
+    if (!m_waylandContext.layerShell) {
+	gnomeBridge = std::make_unique<GnomeBridge> ();
     }
 
     // If xdg-output-manager is available, use it to get logical output positions
@@ -328,7 +354,8 @@ void WaylandOpenGLDriver::setupOutputLayerSurfaces () {
 	    continue;
 	}
 
-	o->setupLS ();
+	if (gnomeBridge) o->setupGnome ();
+	else o->setupLS ();
 	any = true;
     }
 
@@ -370,16 +397,9 @@ void WaylandOpenGLDriver::initGLEW () {
 }
 
 WaylandOpenGLDriver::~WaylandOpenGLDriver () {
-    // destroy xdg outputs
-    for (const auto& screen : this->m_screens) {
-	if (screen->xdgOutput) {
-	    zxdg_output_v1_destroy (screen->xdgOutput);
-	    screen->xdgOutput = nullptr;
-	}
-    }
-
-    // stop EGL
-    eglMakeCurrent (EGL_NO_DISPLAY, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+    eglMakeCurrent (m_eglContext.display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+    while (!m_screens.empty ()) destroyViewport (m_screens.back ());
+    gnomeBridge.reset ();
 
     if (m_eglContext.context != EGL_NO_CONTEXT) {
 	eglDestroyContext (m_eglContext.display, m_eglContext.context);
@@ -416,6 +436,11 @@ void WaylandOpenGLDriver::dispatchEventQueue () {
 
     if (wl_display_dispatch (m_waylandContext.display) == -1) {
 	m_requestedExit = true;
+    }
+
+    const auto screens = m_screens;
+    for (auto* screen : screens) {
+        if (screen->closed) destroyViewport (screen);
     }
 
     m_frameCounter++;

@@ -14,6 +14,8 @@
 #include <WallpaperEngine/Input/MouseInput.h>
 #include <glm/vec2.hpp>
 
+struct xdg_surface;
+struct xdg_toplevel;
 struct zwlr_layer_shell_v1;
 struct zwlr_layer_surface_v1;
 struct zxdg_output_v1;
@@ -45,6 +47,10 @@ namespace Output {
 	wl_egl_window* eglWindow = nullptr;
 	EGLSurface eglSurface = nullptr;
 	wl_surface* surface = nullptr;
+	xdg_surface* xdgSurface = nullptr;
+	xdg_toplevel* xdgToplevel = nullptr;
+	bool configured = false;
+	bool closed = false;
 	zwlr_layer_surface_v1* layerSurface = nullptr;
 	wl_callback* frameCallback = nullptr;
 	glm::dvec2 mousePos = { 0, 0 };
@@ -57,6 +63,7 @@ namespace Output {
 	zxdg_output_v1* xdgOutput = nullptr;
 
 	void setupLS ();
+	void setupGnome ();
 	void setupXdgOutput (zxdg_output_manager_v1* manager);
 
 	/**

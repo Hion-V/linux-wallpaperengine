@@ -2,6 +2,7 @@
 
 #ifdef ENABLE_WAYLAND
 
+#include "GnomeBridge.h"
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GL/glew.h>
@@ -22,6 +23,7 @@ class ApplicationContext;
 class WallpaperApplication;
 } // namespace WallpaperEngine::Application
 
+struct xdg_wm_base;
 struct zwlr_layer_shell_v1;
 struct zwlr_layer_surface_v1;
 struct zxdg_output_manager_v1;
@@ -54,6 +56,7 @@ public:
 	wl_compositor* compositor = nullptr;
 	wl_shm* shm = nullptr;
 	zwlr_layer_shell_v1* layerShell = nullptr;
+	xdg_wm_base* xdgShell = nullptr;
 	wl_seat* seat = nullptr;
 	zxdg_output_manager_v1* xdgOutputManager = nullptr;
     };
@@ -72,6 +75,8 @@ public:
     uint32_t getFrameCounter () const override;
     void dispatchEventQueue () override;
     [[nodiscard]] void* getProcAddress (const char* name) const override;
+
+    std::unique_ptr<GnomeBridge> gnomeBridge;
 
     void onLayerClose (Output::WaylandOutputViewport*);
     Output::WaylandOutputViewport* surfaceToViewport (const wl_surface*) const;
@@ -93,6 +98,7 @@ private:
     WaylandContext m_waylandContext = {};
     mutable bool m_requestedExit;
 
+    void destroyViewport (Output::WaylandOutputViewport* viewport);
     void initWaylandRegistry ();
     void setupOutputLayerSurfaces ();
     void initEGL ();

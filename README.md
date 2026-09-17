@@ -301,9 +301,22 @@ linux-wallpaperengine --set-property bloom=1 2370927443
 
 ---
 
+## NixOS and GNOME 50
+
+This repository includes a Nix flake and a GNOME Shell 50 bridge extension.
+See [installation and usage](docs/gnome-nixos.md) for NixOS configuration,
+extension setup, multi-monitor commands, and current limitations.
+
+```sh
+nix build path:.#gnome-extension
+nix run path:. -- --screen-root DP-1 --bg /path/to/wallpaper
+```
+
+Enable the bridge extension before starting a desktop wallpaper on GNOME.
+
 ## 🧪 Wayland & X11 Support
 
-- **Wayland**: Works with compositors that support `wlr-layer-shell-unstable`. Uses `xdg-output-unstable-v1` for accurate monitor positioning (required for `--screen-span`).
+- **Wayland**: Works with compositors that support `wlr-layer-shell-unstable`, or GNOME 50 with the included bridge extension. Uses `xdg-output-unstable-v1` for accurate monitor positioning (required for `--screen-span`).
 - **X11**: Requires XRandr. Use `--screen-root <screen_name>` (as shown in `xrandr`).
 
 > ⚠ For X11 users: Currently doesn't work if a compositor or desktop environment (e.g. GNOME, KDE, Nautilus) is drawing the background.

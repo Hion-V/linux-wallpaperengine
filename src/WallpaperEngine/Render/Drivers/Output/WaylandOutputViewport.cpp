@@ -47,11 +47,13 @@ static void geometry (
 static void mode (void* data, wl_output* output, uint32_t flags, int32_t width, int32_t height, int32_t refresh) {
     const auto viewport = static_cast<WaylandOutputViewport*> (data);
 
+    if (!(flags & WL_OUTPUT_MODE_CURRENT) || viewport->xdgToplevel) return;
+
     // update viewport size (physical pixels; logicalSize comes from xdg-output or layer shell configure)
     viewport->size = { width, height };
     viewport->viewport = { 0, 0, viewport->size.x * viewport->scale, viewport->size.y * viewport->scale };
 
-    if (viewport->layerSurface) {
+    if (viewport->layerSurface || viewport->xdgToplevel) {
 	viewport->resize ();
     }
 
@@ -67,7 +69,7 @@ static void scale (void* data, wl_output* wl_output, int32_t scale) {
 
     viewport->scale = scale;
 
-    if (viewport->layerSurface) {
+    if (viewport->layerSurface || viewport->xdgToplevel) {
 	viewport->resize ();
     }
 
@@ -97,6 +99,7 @@ static void surfaceFrameCallback (void* data, struct wl_callback* cb, uint32_t t
     wl_callback_destroy (cb);
 
     viewport->frameCallback = nullptr;
+    if (viewport->closed) return;
     viewport->rendering = true;
     viewport->getDriver ()->getApp ().update (viewport);
     viewport->rendering = false;
@@ -132,7 +135,7 @@ static void xdgOutputDone (void* data, struct zxdg_output_v1* xdg_output) {
 }
 
 static void xdgOutputName (void* data, struct zxdg_output_v1* xdg_output, const char* name) {
-    // already handled by wl_output.name
+    if (name) static_cast<WaylandOutputViewport*> (data)->name = name;
 }
 
 static void xdgOutputDescription (void* data, struct zxdg_output_v1* xdg_output, const char* description) {
@@ -248,6 +251,65 @@ void WaylandOutputViewport::setupLS () {
     this->m_driver->getOutput ().reset ();
 }
 
+static void gnomeConfigure (void* data, xdg_surface* surface, uint32_t serial) {
+    auto* viewport = static_cast<WaylandOutputViewport*> (data);
+    xdg_surface_ack_configure (surface, serial);
+    viewport->configured = true;
+    viewport->viewport = { 0, 0, viewport->size.x * viewport->scale, viewport->size.y * viewport->scale };
+    viewport->resize ();
+}
+
+static void gnomeToplevelConfigure (void* data, xdg_toplevel*, int32_t width, int32_t height, wl_array*) {
+    auto* viewport = static_cast<WaylandOutputViewport*> (data);
+    if (width > 0 && height > 0) {
+        viewport->size = { width, height };
+        viewport->logicalSize = viewport->size;
+    }
+}
+
+static void gnomeClose (void* data, xdg_toplevel*) {
+    auto* viewport = static_cast<WaylandOutputViewport*> (data);
+    viewport->getDriver ()->onLayerClose (viewport);
+}
+
+void WaylandOutputViewport::setupGnome () {
+    // Register before committing the surface so Shell can classify it before mapping.
+    const auto token = m_driver->gnomeBridge->registerOutput (name);
+    auto* wayland = m_driver->getWaylandContext ();
+    auto* egl = m_driver->getEGLContext ();
+    surface = wl_compositor_create_surface (wayland->compositor);
+    xdgSurface = xdg_wm_base_get_xdg_surface (wayland->xdgShell, surface);
+    static const xdg_surface_listener surfaceListener = { .configure = gnomeConfigure };
+    xdg_surface_add_listener (xdgSurface, &surfaceListener, this);
+    xdgToplevel = xdg_surface_get_toplevel (xdgSurface);
+    static const xdg_toplevel_listener toplevelListener = {
+        .configure = gnomeToplevelConfigure, .close = gnomeClose
+    };
+    xdg_toplevel_add_listener (xdgToplevel, &toplevelListener, this);
+    xdg_toplevel_set_app_id (xdgToplevel, token.c_str ());
+    xdg_toplevel_set_title (xdgToplevel, "Linux Wallpaper Engine");
+    // Empty input region lets desktop clicks reach GNOME and desktop icon extensions.
+    auto* region = wl_compositor_create_region (wayland->compositor);
+    wl_surface_set_input_region (surface, region);
+    wl_region_destroy (region);
+    size = logicalSize.x > 0 && logicalSize.y > 0 ? logicalSize : size / scale;
+    wl_surface_set_buffer_scale (surface, scale);
+    wl_surface_commit (surface);
+    while (!configured && !closed) {
+        if (wl_display_dispatch (wayland->display) < 0)
+            sLog.exception ("GNOME disconnected before configuring wallpaper");
+    }
+    if (closed) sLog.exception ("GNOME closed the wallpaper during setup");
+    eglWindow = wl_egl_window_create (surface, size.x * scale, size.y * scale);
+    if (!eglWindow) sLog.exception ("Failed to create GNOME wallpaper EGL window");
+    eglSurface = egl->eglCreatePlatformWindowSurfaceEXT (egl->display, egl->config, eglWindow, nullptr);
+    if (!eglWindow || eglSurface == EGL_NO_SURFACE)
+        sLog.exception ("Failed to create GNOME wallpaper EGL surface");
+    if (!eglMakeCurrent (egl->display, eglSurface, eglSurface, egl->context))
+        sLog.exception ("Failed to make GNOME wallpaper EGL context current");
+    m_driver->getOutput ().reset ();
+}
+
 WaylandOpenGLDriver* WaylandOutputViewport::getDriver () const { return this->m_driver; }
 
 void WaylandOutputViewport::makeCurrent () {
@@ -277,6 +339,8 @@ void WaylandOutputViewport::resize () {
 	return;
     }
 
+    viewport = { 0, 0, size.x * scale, size.y * scale };
+    wl_surface_set_buffer_scale (surface, scale);
     wl_egl_window_resize (this->eglWindow, this->size.x * this->scale, this->size.y * this->scale, 0, 0);
 
     this->getDriver ()->getOutput ().reset ();
