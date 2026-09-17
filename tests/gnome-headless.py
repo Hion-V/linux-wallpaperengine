@@ -33,6 +33,11 @@ def state():
     return json.loads(ast.literal_eval(value)[0])
 
 
+def action(name):
+    call('/org/gnome/Shell/Extensions/LinuxWallpaperEngine',
+         'io.github.almamu.LinuxWallpaperEngine.TestAction', name)
+
+
 def wait_for(fn, timeout=20):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -52,6 +57,13 @@ def inside(renderer, directory):
 enabled-extensions=['{UUID}']
 disable-user-extensions=false
 welcome-dialog-last-shown-version='50.4'
+
+[org/gnome/mutter]
+dynamic-workspaces=false
+workspaces-only-on-primary=false
+
+[org/gnome/desktop/wm/preferences]
+num-workspaces=2
 ''', text=True, check=True)
     with (directory / 'shell.log').open('w') as shell_log, (directory / 'renderer.log').open('w') as renderer_log:
         shell = subprocess.Popen([
@@ -62,6 +74,7 @@ welcome-dialog-last-shown-version='50.4'
         app = None
         try:
             wait_for(lambda: state()['ready'])
+            action('hide')
             app = subprocess.Popen([
                 renderer, '--assets-dir', str(directory / 'assets'), '--silent',
                 '--no-audio-processing', '--noautomute',
@@ -86,6 +99,55 @@ welcome-dialog-last-shown-version='50.4'
                  'false', 'false', str(screenshot))
             assert screenshot.exists(), 'No rendered desktop screenshot'
             print(f'Desktop screenshot: {screenshot}')
+            action('show')
+            time.sleep(2)
+            overview = state()
+            assert overview['overview'], 'Activities overview did not open'
+            mirrors = overview['mirrors']
+            assert any(not m['thumbnail'] for m in mirrors), mirrors
+            assert any(m['thumbnail'] for m in mirrors), mirrors
+            assert all(m['live'] for m in mirrors), mirrors
+            assert {m['monitor'] for m in mirrors} == {0, 1}, mirrors
+            for name in ['overview', 'overview-next-frame']:
+                time.sleep(0.4)
+                call('/org/gnome/Shell/Screenshot', 'org.gnome.Shell.Screenshot.Screenshot',
+                     'false', 'false', str(directory / f'{name}.png'))
+            # Compare pixels inside each on-screen workspace card, excluding Shell
+            # chrome. A source reference alone would not catch frozen frame callbacks.
+            for monitor_index, monitor in enumerate(overview['monitors']):
+                card = next(m for m in mirrors if not m['thumbnail'] and m['monitor'] == monitor_index
+                    and monitor[0] <= m['rect'][0] + m['rect'][2] / 2 < monitor[0] + monitor[2])
+                x, y, width, height = card['rect']
+                crop = f'crop={int(width / 2)}:{int(height / 2)}:{int(x + width / 4)}:{int(y + height / 4)}'
+                frames = [subprocess.check_output([
+                    os.environ['LWE_TEST_FFMPEG'], '-v', 'error', '-i', str(directory / f'{name}.png'),
+                    '-vf', crop, '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-',
+                ]) for name in ['overview', 'overview-next-frame']]
+                assert frames[0] != frames[1], f'Wallpaper frozen in overview on monitor {monitor_index}'
+            print('PASS: animated wallpaper in workspace previews and thumbnails on both monitors')
+            action('add-workspace')
+            time.sleep(1)
+            assert len(state()['mirrors']) > len(mirrors), 'New workspace has no wallpaper'
+            action('switch-workspace')
+            time.sleep(1)
+            assert all(m['live'] for m in state()['mirrors'])
+            action('hide')
+            time.sleep(1)
+            action('show')
+            time.sleep(1)
+            assert all(m['live'] for m in state()['mirrors'])
+            print('PASS: workspace creation, switching, and repeated overview transitions')
+            action('change-background')
+            time.sleep(1)
+            assert all(m['live'] for m in state()['mirrors'])
+            renderer_args = app.args
+            app.terminate()
+            app.wait(timeout=10)
+            wait_for(lambda: not state()['windows'] and not any(m['live'] for m in state()['mirrors']))
+            app = subprocess.Popen(renderer_args, stdout=renderer_log, stderr=subprocess.STDOUT,
+                env={**os.environ, 'WAYLAND_DISPLAY': 'lwe-test', 'SDL_AUDIODRIVER': 'dummy'})
+            wait_for(lambda: len(state()['windows']) == 2 and all(m['live'] for m in state()['mirrors']))
+            print('PASS: background changes and renderer restart while Activities remains open')
             call('/org/gnome/Shell', 'org.gnome.Shell.Extensions.DisableExtension', UUID)
             assert app.wait(timeout=10) == 0, 'Renderer did not exit cleanly on extension disable'
             print('PASS: disabling the bridge closes both outputs and stops the renderer')
@@ -114,17 +176,34 @@ def main():
     # does not export diagnostics or enable Shell's unsafe screenshot access.
     source = (extension / 'extension.js').read_text()
     source = source.replace('<method name="Register">',
-        '<method name="TestState"><arg type="s" direction="out"/></method><method name="Register">')
+        '<method name="TestState"><arg type="s" direction="out"/></method>'
+        '<method name="TestAction"><arg type="s" direction="in"/></method><method name="Register">')
     source = source.replace('    _monitor(connector) {', '''    TestState() {
         global.context.unsafe_mode = true;
-        Main.overview.hide();
         const rect = r => [r.x, r.y, r.width, r.height];
         return JSON.stringify({ready: !Main.layoutManager._startingUp,
+            overview: Main.overview.visible,
+            mirrors: [...this._overview._targets.values()].map(r => ({
+                thumbnail: r.thumbnail, live: !!r.clone?.get_source(),
+                monitor: r.thumbnail ? r.actor.monitorIndex : r.actor._monitorIndex,
+                rect: [...r.actor.get_transformed_position(), ...r.actor.get_transformed_size()],
+            })),
             monitors: Main.layoutManager.monitors.map(rect),
             windows: [...this._windows.entries()].filter(([, r]) => r.registration).map(([w]) => ({
                 type: w.get_window_type(), rect: rect(w.get_frame_rect()),
                 skip: w.is_skip_taskbar(), sticky: w.is_on_all_workspaces(), focus: w.has_focus(),
             }))});
+    }
+    TestAction(action) {
+        if (action === 'show') Main.overview.show();
+        if (action === 'hide') Main.overview.hide();
+        if (action === 'add-workspace') global.workspace_manager.append_new_workspace(false, global.get_current_time());
+        if (action === 'change-background') {
+            const settings = new Gio.Settings({schema_id: 'org.gnome.desktop.background'});
+            settings.set_string('picture-uri', '');
+            settings.set_string('picture-uri-dark', '');
+        }
+        if (action === 'switch-workspace') global.workspace_manager.get_workspace_by_index(1).activate(global.get_current_time());
     }
     _monitor(connector) {''')
     (extension / 'extension.js').write_text(source)
@@ -133,7 +212,7 @@ def main():
     }))
     subprocess.run([ffmpeg, '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=30',
         '-t', '2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', str(directory / 'wallpaper/test.mp4')], check=True)
-    env = {**os.environ, **{f'XDG_{key}': str(directory / value) for key, value in {
+    env = {**os.environ, 'LWE_TEST_FFMPEG': ffmpeg, **{f'XDG_{key}': str(directory / value) for key, value in {
         'DATA_HOME': 'data', 'CONFIG_HOME': 'config', 'CACHE_HOME': 'cache', 'RUNTIME_DIR': 'runtime',
     }.items()}}
     subprocess.run(['dbus-run-session', '--', sys.executable, str(Path(__file__).resolve()),

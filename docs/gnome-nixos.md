@@ -116,7 +116,13 @@ each registration can claim one window.
 GNOME 50's Mutter desktop window type supplies bottom stacking, no initial focus,
 and visibility on all workspaces. The extension hides the window from window
 lists and sizes it to the full monitor, including the area behind the panel.
-No Shell method overrides or actor reparenting are used. The renderer submits an
+The desktop surface stays in Mutter's window group. In Activities, live Clutter
+clones supply each monitor's wallpaper to the large workspace previews and the
+small thumbnail strip, behind application previews. Scoped, reversible hooks on
+GNOME 50's overview actor constructors also cover newly created workspaces.
+Clones follow GNOME's work-area cropping and rounded preview corners, and are
+removed when the renderer stops or the extension is disabled. Monitors without a
+running wallpaper retain their normal background. The renderer submits an
 empty input region so clicks pass through to GNOME or desktop icons.
 See [Mutter's window type API](https://gnome.pages.gitlab.gnome.org/mutter/meta/method.Window.set_type.html)
 and [GNOME 50's window implementation](https://gitlab.gnome.org/GNOME/mutter/-/blob/gnome-50/src/core/window.c).
@@ -129,7 +135,7 @@ extension remains enabled under the lock screen, behind GNOME's screen shield.
 
 Current limitations:
 
-- The overview and lock screen keep GNOME's normal backgrounds.
+- The lock screen keeps GNOME's normal background; Activities uses the live wallpaper.
 - Wallpapers do not receive mouse clicks/movement in bridge mode.
 - The existing fullscreen-pause detector requires wlroots' foreign-toplevel
   protocol, which GNOME does not expose; fullscreen auto-pause is unavailable.
@@ -143,6 +149,7 @@ nix build path:.#linux-wallpaperengine path:.#gnome-extension
 nix flake check path:.
 # Or run the bridge lifecycle tests directly:
 node tests/gnome-bridge.mjs
+node tests/gnome-overview.mjs
 ```
 
 A missing/disabled extension produces a bridge registration error before the
@@ -165,7 +172,17 @@ python3 tests/gnome-headless.py /tmp/lwe-build/bin/linux-wallpaperengine /path/t
 ```
 
 This starts a separate headless compositor on a private session bus, generates a
-video, checks two monitors' geometry and desktop window state, captures a
-screenshot, and verifies shutdown on extension disable. It writes logs and the
+video, checks two monitors' geometry and desktop window state, captures desktop
+and overview screenshots, verifies that overview frames keep changing, exercises
+workspace creation/switching and renderer restarts, and verifies shutdown on
+extension disable. It writes logs and the
 screenshot to a reported temporary directory. Test-only diagnostics and screenshot
 access are injected into the temporary extension copy, never the installed one.
+
+### Updating the extension
+
+After rebuilding your NixOS configuration with this checkout, log out and back in
+to load extension version 2, then start the wallpaper renderer again. If you use
+the local symlink installation, rebuild `path:.#gnome-extension` and update the
+symlink to the new output first. GNOME caches JavaScript modules, so toggling the
+extension alone is not enough to load changed code.

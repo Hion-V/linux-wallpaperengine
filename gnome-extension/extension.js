@@ -3,6 +3,7 @@ import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import {OverviewWallpapers} from './overview.js';
 
 const IFACE = `<node>
   <interface name="io.github.almamu.LinuxWallpaperEngine">
@@ -18,6 +19,13 @@ export default class WallpaperBridge extends Extension {
     enable() {
         this._registrations = new Map();
         this._windows = new Map();
+        this._overview = new OverviewWallpapers(index => {
+            for (const registration of this._registrations.values()) {
+                if (registration.window && this._monitor(registration.connector) === index)
+                    return registration.window.get_compositor_private();
+            }
+            return null;
+        });
         this._cancellable = new Gio.Cancellable();
         this._bus = Gio.DBus.session;
         this._export = Gio.DBusExportedObject.wrapJSObject(IFACE, this);
@@ -29,6 +37,7 @@ export default class WallpaperBridge extends Extension {
                 if (record.registration)
                     this._place(window, record.registration);
             }
+            this._overview.refresh();
         });
     }
 
@@ -91,16 +100,18 @@ export default class WallpaperBridge extends Extension {
         record.registration = registration;
         record.token = token;
         registration.window = window;
-        // Mutter owns stacking and workspace visibility. No Shell prototype overrides
-        // or actor reparenting are needed on GNOME 50.
+        // Mutter owns desktop stacking and workspace visibility. Overview actors
+        // mirror this surface without moving it out of Mutter's window group.
         window.set_type(Meta.WindowType.DESKTOP);
         window.hide_from_window_list();
         window.stick();
         this._place(window, registration);
         window.lower();
+        this._overview.refresh();
         record.signals.push(window.connect('shown', () => {
             this._place(window, registration);
             window.lower();
+            this._overview.refresh();
         }));
     }
 
@@ -120,12 +131,15 @@ export default class WallpaperBridge extends Extension {
         if (!registration)
             return;
         this._registrations.delete(token);
+        this._overview?.refresh();
         Gio.bus_unwatch_name(registration.watch);
         if (close && registration.window)
             registration.window.delete(global.get_current_time());
     }
 
     disable() {
+        this._overview.destroy();
+        this._overview = null;
         this._cancellable.cancel();
         this._export.unexport();
         global.display.disconnect(this._created);

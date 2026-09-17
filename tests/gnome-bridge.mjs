@@ -36,6 +36,7 @@ function setup() {
         GLib: {Variant: class { constructor(type, value) { this.value = value; } },
             VariantType: class {}, uuid_string_random: () => String(++next)},
         Meta: {is_wayland_compositor: () => true, WindowType: {DESKTOP: 1}, WindowClientType: {WAYLAND: 1}},
+        OverviewWallpapers: class { refresh() {} destroy() {} },
         Extension: class {}, Main: {layoutManager: layout},
         global: {display, backend: {get_monitor_manager: () => manager}, get_current_time: () => 0},
     });

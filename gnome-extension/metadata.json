@@ -4,6 +4,6 @@
   "description": "Place registered Linux Wallpaper Engine Wayland surfaces on the GNOME desktop.",
   "shell-version": ["50"],
   "session-modes": ["user", "unlock-dialog"],
-  "version": 1,
+  "version": 2,
   "url": "https://github.com/Almamu/linux-wallpaperengine"
 }
