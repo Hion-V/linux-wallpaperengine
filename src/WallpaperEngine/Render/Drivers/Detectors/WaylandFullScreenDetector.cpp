@@ -1,4 +1,5 @@
 #include "WaylandFullScreenDetector.h"
+#include "WallpaperEngine/Render/Drivers/WaylandOpenGLDriver.h"
 
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/Drivers/VideoFactories.h"
@@ -255,10 +256,21 @@ bool WaylandFullScreenDetector::anythingFullscreen () const {
 
 void WaylandFullScreenDetector::reset () { }
 
+class GnomeFullScreenDetector final : public FullScreenDetector {
+public:
+    GnomeFullScreenDetector (ApplicationContext& context, GnomeBridge& bridge)
+        : FullScreenDetector (context), m_bridge (bridge) {}
+    bool anythingFullscreen () const override { return m_bridge.anythingFullscreen (); }
+private:
+    GnomeBridge& m_bridge;
+};
+
 __attribute__ ((constructor)) void registerWaylandFullscreenDetector () {
     sVideoFactories.registerFullscreenDetector (
 	"wayland", [] (ApplicationContext& context, VideoDriver& driver) -> std::unique_ptr<FullScreenDetector> {
-	    return std::make_unique<WaylandFullScreenDetector> (context);
+	    if (auto* wayland = dynamic_cast<WaylandOpenGLDriver*> (&driver); wayland && wayland->gnomeBridge)
+                return std::make_unique<GnomeFullScreenDetector> (context, *wayland->gnomeBridge);
+            return std::make_unique<WaylandFullScreenDetector> (context);
 	}
     );
 }

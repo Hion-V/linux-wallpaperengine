@@ -74,6 +74,8 @@ public:
     glm::ivec2 getFramebufferSize () const override;
     uint32_t getFrameCounter () const override;
     void dispatchEventQueue () override;
+    void dispatchPausedEvents () override;
+    bool renderingPaused = false;
     [[nodiscard]] void* getProcAddress (const char* name) const override;
 
     std::unique_ptr<GnomeBridge> gnomeBridge;
@@ -90,6 +92,7 @@ public:
     std::vector<Output::WaylandOutputViewport*> m_screens = {};
 
 private:
+    void pumpEvents ();
     /** The output used by the driver */
     Output::WaylandOutput m_output;
     /** The EGL context in use */

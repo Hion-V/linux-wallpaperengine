@@ -30,7 +30,7 @@
 #include <stb_image_write.h>
 #include <thread>
 
-#define FULLSCREEN_CHECK_WAIT_TIME 250
+#define FULLSCREEN_CHECK_WAIT_TIME 250000
 
 float g_Time;
 float g_TimeLast;
@@ -858,10 +858,13 @@ void WallpaperApplication::render () {
 
     if (this->m_isPaused) {
 	usleep (FULLSCREEN_CHECK_WAIT_TIME);
+        m_videoDriver->dispatchPausedEvents ();
+        if (m_videoDriver->closeRequested ()) m_context.state.general.keepRunning = false;
 	if (this->m_fullScreenDetector->anythingFullscreen () && this->m_context.state.general.keepRunning) {
 	    return;
 	}
 	m_renderContext->setPause (false);
+        sLog.out ("Resuming wallpaper playback");
 
 	// account for paused duration in playlist timers
 	const auto pausedNow = std::chrono::steady_clock::now ();
@@ -930,6 +933,7 @@ void WallpaperApplication::render () {
 	// check for fullscreen windows and wait until there's none fullscreen
 	if (this->m_fullScreenDetector->anythingFullscreen () && this->m_context.state.general.keepRunning) {
 	    this->m_isPaused = true;
+            sLog.out ("Pausing wallpaper playback for fullscreen application");
 	    this->m_pauseStart = std::chrono::steady_clock::now ();
 
 	    m_renderContext->setPause (true);

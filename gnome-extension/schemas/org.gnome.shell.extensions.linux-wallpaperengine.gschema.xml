@@ -1,0 +1,8 @@
+<schemalist>
+  <schema id="org.gnome.shell.extensions.linux-wallpaperengine" path="/org/gnome/shell/extensions/linux-wallpaperengine/">
+    <key name="pause-on-fullscreen" type="b"><default>true</default><summary>Pause for fullscreen applications</summary></key>
+    <key name="filter-mode" type="s"><choices><choice value="blacklist"/><choice value="whitelist"/></choices><default>'blacklist'</default><summary>Application filter mode</summary></key>
+    <key name="window-classes" type="as"><default>[]</default><summary>Blacklist window classes and Wayland application IDs</summary></key>
+    <key name="whitelist-window-classes" type="as"><default>[]</default><summary>Whitelist window classes and Wayland application IDs</summary></key>
+  </schema>
+</schemalist>

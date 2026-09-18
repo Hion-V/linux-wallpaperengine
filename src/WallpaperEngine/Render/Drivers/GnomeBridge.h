@@ -1,6 +1,7 @@
 #pragma once
 
 #include <dbus/dbus.h>
+#include <chrono>
 #include <stdexcept>
 #include <string>
 
@@ -23,6 +24,26 @@ public:
     }
     GnomeBridge (const GnomeBridge&) = delete;
     GnomeBridge& operator= (const GnomeBridge&) = delete;
+
+    bool anythingFullscreen () {
+        const auto now = std::chrono::steady_clock::now ();
+        if (now < m_nextCheck) return m_paused;
+        m_nextCheck = now + std::chrono::milliseconds (200);
+        auto* request = dbus_message_new_method_call (
+            "org.gnome.Shell", "/org/gnome/Shell/Extensions/LinuxWallpaperEngine",
+            "io.github.almamu.LinuxWallpaperEngine", "GetPauseState");
+        m_paused = false;
+        if (!request) return false;
+        auto* reply = dbus_connection_send_with_reply_and_block (m_connection, request, 250, nullptr);
+        dbus_message_unref (request);
+        if (reply) {
+            dbus_bool_t paused = false;
+            if (dbus_message_get_args (reply, nullptr, DBUS_TYPE_BOOLEAN, &paused, DBUS_TYPE_INVALID))
+                m_paused = paused;
+            dbus_message_unref (reply);
+        }
+        return m_paused;
+    }
 
     std::string registerOutput (const std::string& output) {
         auto* request = dbus_message_new_method_call (
@@ -52,6 +73,8 @@ public:
         return result;
     }
 private:
+    bool m_paused = false;
+    std::chrono::steady_clock::time_point m_nextCheck {};
     DBusConnection* m_connection = nullptr;
 };
 }

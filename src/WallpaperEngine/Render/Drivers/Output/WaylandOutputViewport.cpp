@@ -99,7 +99,7 @@ static void surfaceFrameCallback (void* data, struct wl_callback* cb, uint32_t t
     wl_callback_destroy (cb);
 
     viewport->frameCallback = nullptr;
-    if (viewport->closed) return;
+    if (viewport->closed || viewport->getDriver ()->renderingPaused) return;
     viewport->rendering = true;
     viewport->getDriver ()->getApp ().update (viewport);
     viewport->rendering = false;

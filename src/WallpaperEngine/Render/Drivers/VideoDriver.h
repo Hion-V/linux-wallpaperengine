@@ -71,6 +71,7 @@ public:
      * Process events on the driver and renders a frame
      */
     virtual void dispatchEventQueue () = 0;
+    virtual void dispatchPausedEvents () {}
     /**
      * @return The app that owns this driver
      */

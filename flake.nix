@@ -52,12 +52,14 @@
           });
           extension = pkgs.stdenvNoCC.mkDerivation {
             pname = "gnome-shell-extension-linux-wallpaperengine";
-            version = "3";
+            version = "4";
             src = ./gnome-extension;
+            nativeBuildInputs = [ pkgs.glib ];
             dontBuild = true;
             installPhase = ''
               mkdir -p $out/share/gnome-shell/extensions/linux-wallpaperengine@almamu.github.io
-              cp extension.js overview.js blurMyShell.js metadata.json $out/share/gnome-shell/extensions/linux-wallpaperengine@almamu.github.io/
+              glib-compile-schemas --strict schemas
+              cp -r schemas prefs.js extension.js overview.js blurMyShell.js metadata.json $out/share/gnome-shell/extensions/linux-wallpaperengine@almamu.github.io/
             '';
             passthru.extensionUuid = "linux-wallpaperengine@almamu.github.io";
             meta = { platforms = systems; license = pkgs.lib.licenses.gpl3Plus; };
@@ -79,9 +81,22 @@
             cp ${./tests/gnome-bridge.mjs} tests/gnome-bridge.mjs
             cp ${./tests/gnome-overview.mjs} tests/gnome-overview.mjs
             cp ${./tests/gnome-blur-my-shell.mjs} tests/gnome-blur-my-shell.mjs
+            cp ${./tests/gnome-preferences.mjs} tests/gnome-preferences.mjs
+            node tests/gnome-preferences.mjs
             node tests/gnome-bridge.mjs
             node tests/gnome-overview.mjs
             node tests/gnome-blur-my-shell.mjs
+            touch $out
+          '';
+          pause-dbus = pkgs.runCommand "gnome-pause-dbus-tests" {
+            nativeBuildInputs = [ pkgs.stdenv.cc pkgs.pkg-config pkgs.dbus ];
+            buildInputs = [ pkgs.dbus ];
+          } ''
+            mkdir -p include/WallpaperEngine/Render/Drivers
+            cp ${./src/WallpaperEngine/Render/Drivers/GnomeBridge.h} include/WallpaperEngine/Render/Drivers/GnomeBridge.h
+            c++ -std=c++17 -pthread -Iinclude ${./tests/gnome-pause-dbus.cpp} \
+              $(pkg-config --cflags --libs dbus-1) -o pause-test
+            dbus-run-session --config-file=${pkgs.dbus}/share/dbus-1/session.conf -- ./pause-test
             touch $out
           '';
           extension = self.packages.${system}.gnome-extension;

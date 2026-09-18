@@ -17,6 +17,8 @@ extern "C" {
 #undef static
 
 #include <algorithm>
+#include <poll.h>
+#include <cerrno>
 #include <string.h>
 #include <unistd.h>
 
@@ -415,33 +417,22 @@ WaylandOpenGLDriver::~WaylandOpenGLDriver () {
 }
 
 void WaylandOpenGLDriver::dispatchEventQueue () {
-    static bool initialized = false;
-
-    if (!initialized) {
-	initialized = true;
-
-	for (const auto& viewport : this->getOutput ().getViewports () | std::views::values) {
-	    this->getApp ().update (viewport);
-	}
+    renderingPaused = false;
+    // Restart callback chains consumed while paused, including the initial frame.
+    for (auto* viewport : m_screens) {
+        if (!viewport->closed && !viewport->frameCallback)
+            getApp ().update (viewport);
     }
 
     // TODO: FRAMETIME CONTROL SHOULD GO BACK TO THE CWALLPAPAERAPPLICATION ONCE ACTUAL PARTICLES ARE IMPLEMENTED
     // TODO: AS THOSE, MORE THAN LIKELY, WILL REQUIRE OF A DIFFERENT PROCESSING RATE
 
-    // TODO: WRITE A NON-BLOCKING VERSION OF THIS ONCE PARTICLE SIMULATION STARTS WORKING
-    // TODO: OTHERWISE wl_display_dispatch WILL BLOCK IF NO SURFACES ARE BEING DRAWN
+    // Poll without blocking: occluded surfaces may stop receiving frame callbacks.
     static float startTime, endTime, minimumTime = 1.0f / this->m_context.settings.render.maximumFPS;
     // get the start time of the frame
     startTime = this->getRenderTime ();
 
-    if (wl_display_dispatch (m_waylandContext.display) == -1) {
-	m_requestedExit = true;
-    }
-
-    const auto screens = m_screens;
-    for (auto* screen : screens) {
-        if (screen->closed) destroyViewport (screen);
-    }
+    pumpEvents ();
 
     m_frameCounter++;
 
@@ -450,6 +441,33 @@ void WaylandOpenGLDriver::dispatchEventQueue () {
     // ensure the frame time is correct to not overrun FPS
     if ((endTime - startTime) < minimumTime) {
 	usleep ((minimumTime - (endTime - startTime)) * CLOCKS_PER_SEC);
+    }
+}
+
+void WaylandOpenGLDriver::dispatchPausedEvents () {
+    renderingPaused = true;
+    pumpEvents ();
+}
+
+void WaylandOpenGLDriver::pumpEvents () {
+    auto* display = m_waylandContext.display;
+    while (wl_display_prepare_read (display) != 0) {
+        if (wl_display_dispatch_pending (display) < 0) { m_requestedExit = true; return; }
+    }
+    wl_display_flush (display);
+    pollfd fd {wl_display_get_fd (display), POLLIN, 0};
+    const int result = poll (&fd, 1, 0);
+    if (result > 0 && (fd.revents & POLLIN)) {
+        if (wl_display_read_events (display) < 0) m_requestedExit = true;
+    } else {
+        wl_display_cancel_read (display);
+        if ((result < 0 && errno != EINTR) || (fd.revents & (POLLERR | POLLHUP | POLLNVAL)))
+            m_requestedExit = true;
+    }
+    if (wl_display_dispatch_pending (display) < 0) m_requestedExit = true;
+    const auto screens = m_screens;
+    for (auto* screen : screens) {
+        if (screen->closed) destroyViewport (screen);
     }
 }
 

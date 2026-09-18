@@ -2,8 +2,14 @@
   "uuid": "linux-wallpaperengine@almamu.github.io",
   "name": "Linux Wallpaper Engine Bridge",
   "description": "Place registered Linux Wallpaper Engine Wayland surfaces on the GNOME desktop.",
-  "shell-version": ["50"],
-  "session-modes": ["user", "unlock-dialog"],
-  "version": 3,
-  "url": "https://github.com/Almamu/linux-wallpaperengine"
+  "shell-version": [
+    "50"
+  ],
+  "session-modes": [
+    "user",
+    "unlock-dialog"
+  ],
+  "version": 4,
+  "url": "https://github.com/Almamu/linux-wallpaperengine",
+  "settings-schema": "org.gnome.shell.extensions.linux-wallpaperengine"
 }

@@ -139,8 +139,6 @@ Current limitations:
 
 - The lock screen keeps GNOME's normal background; Activities uses the live wallpaper.
 - Wallpapers do not receive mouse clicks/movement in bridge mode.
-- The existing fullscreen-pause detector requires wlroots' foreign-toplevel
-  protocol, which GNOME does not expose; fullscreen auto-pause is unavailable.
 - GNOME bridge surfaces always use the desktop layer; `--layer` does not raise them.
 - Integer Wayland buffer scaling is used; fractional scaling may supersample.
 
@@ -171,6 +169,7 @@ nix flake check path:.
 node tests/gnome-bridge.mjs
 node tests/gnome-overview.mjs
 node tests/gnome-blur-my-shell.mjs
+node tests/gnome-preferences.mjs
 ```
 
 A missing/disabled extension produces a bridge registration error before the
@@ -184,12 +183,14 @@ journalctl --user -b | rg 'linux-wallpaperengine|WallpaperBridge|JS ERROR'
 After changing extension JavaScript, log out and in. Disabling and enabling an
 extension does not reliably invalidate GNOME's JavaScript module cache.
 
-For an isolated GNOME 50 integration test, with `gnome-shell`, `dconf`, `gdbus`,
-`dbus-run-session`, and Python on PATH:
+Run GNOME 50 integration tests in a disposable VM. A previous host test coincided
+with a desktop Shell crash; a private bus does not isolate GPU or system resources.
+The test requires explicit opt-in, with `gnome-shell`, `dconf`, `gdbus`,
+`glib-compile-schemas`, `dbus-run-session`, and Python on PATH:
 
 ```sh
 nix build path:. --out-link /tmp/lwe-build
-python3 tests/gnome-headless.py /tmp/lwe-build/bin/linux-wallpaperengine /path/to/ffmpeg
+python3 tests/gnome-headless.py --allow-host-compositor-test /tmp/lwe-build/bin/linux-wallpaperengine /path/to/ffmpeg
 ```
 
 This starts a separate headless compositor on a private session bus, generates a
@@ -200,10 +201,15 @@ extension disable. It writes logs and the
 screenshot to a reported temporary directory. Test-only diagnostics and screenshot
 access are injected into the temporary extension copy, never the installed one.
 
+Set `LWE_TEST_GJS` to a GJS executable with GTK 3 typelibs available to also test
+a real fullscreen application, two renderer processes, pause/resume frames,
+preferences opening, and filter changes. The compositor-free `pause-dbus` flake
+check tests the C++ client against a private fake bridge, including service loss.
+
 To include Blur My Shell in the headless test, pass its installed directory:
 
 ```sh
-python3 tests/gnome-headless.py /tmp/lwe-build/bin/linux-wallpaperengine /path/to/ffmpeg \
+python3 tests/gnome-headless.py --allow-host-compositor-test /tmp/lwe-build/bin/linux-wallpaperengine /path/to/ffmpeg \
   --blur-my-shell ~/.local/share/gnome-shell/extensions/blur-my-shell@aunetx
 ```
 
@@ -217,3 +223,36 @@ to load extension version 3, then start the wallpaper renderer again. If you use
 the local symlink installation, rebuild `path:.#gnome-extension` and update the
 symlink to the new output first. GNOME caches JavaScript modules, so toggling the
 extension alone is not enough to load changed code.
+
+## Fullscreen auto-pause and application filters
+
+Fullscreen applications on any monitor of the current workspace pause all
+bridge-connected renderer instances by default, including video and audio.
+Minimized windows, other workspaces, and wallpaper windows do not trigger it.
+Opening Activities resumes playback so its live previews keep animating.
+Changes are picked up within roughly half a second while Shell is responsive.
+
+Open the bridge's settings button in GNOME Extensions, or run:
+
+```bash
+gnome-extensions prefs linux-wallpaperengine@almamu.github.io
+```
+
+- **Pause for fullscreen applications:** enable or disable auto-pause.
+- **Blacklist:** listed applications are ignored; other fullscreen apps pause playback.
+- **Whitelist:** only listed fullscreen applications pause playback. An empty list never pauses.
+- **Window classes / app IDs:** comma-separated exact matches, ignoring letter case.
+  For example, `firefox, org.gnome.Terminal`. Press the entry's checkmark to apply.
+  Each mode remembers its own list; switching modes displays that mode’s saved entries.
+  Apply edits before switching. Existing shared-list entries are retained as the blacklist;
+  the new whitelist starts empty. Both WM class and class instance are checked.
+
+To inspect window classes, open GNOME Looking Glass (`Alt+F2`, then `lg`) and
+use its Windows tab. Native Wayland applications expose their app ID as the class.
+Preferences persist across logins and apply to running renderers.
+`--no-fullscreen-pause` opts an individual renderer out. The wlroots-specific
+`--fullscreen-pause-only-active` and `--fullscreen-pause-ignore-appid` flags do
+not configure the GNOME bridge; use its preferences instead.
+
+Rebuild both flake packages and log out/in after upgrading the bridge. The Nix
+extension package includes the compiled settings schema and preferences window.

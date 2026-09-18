@@ -17,6 +17,10 @@ class Signals {
 function setup() {
     const watches = new Map();
     let next = 0;
+    const settings = {enabled: true, mode: 'blacklist', classes: [], whitelist: [],
+        get_boolean() { return this.enabled; }, get_string() { return this.mode; }, get_strv(key) { return key === 'whitelist-window-classes' ? this.whitelist : this.classes; }};
+    const actors = [];
+    const overview = {visible: false};
     const display = new Signals();
     display.get_monitor_geometry = () => ({x: -1280, y: 0, width: 1280, height: 720});
     const layout = new Signals();
@@ -38,8 +42,8 @@ function setup() {
         Meta: {is_wayland_compositor: () => true, WindowType: {DESKTOP: 1}, WindowClientType: {WAYLAND: 1}},
         BlurMyShellWallpapers: class { refresh() {} destroy() {} },
         OverviewWallpapers: class { refresh() {} destroy() {} },
-        Extension: class {}, Main: {layoutManager: layout},
-        global: {display, backend: {get_monitor_manager: () => manager}, get_current_time: () => 0},
+        Extension: class { getSettings() { return settings; } }, Main: {layoutManager: layout, overview},
+        global: {display, get_window_actors: () => actors, workspace_manager: {get_active_workspace: () => 0}, backend: {get_monitor_manager: () => manager}, get_current_time: () => 0},
     });
     const source = readFileSync(new URL('../gnome-extension/extension.js', import.meta.url), 'utf8')
         .replace(/^import .*;\n/gm, '').replace('export default class WallpaperBridge', 'class WallpaperBridge');
@@ -63,7 +67,7 @@ function setup() {
         display.emit('window-created', w);
         return w;
     }
-    return {bridge, watches, display, layout, manager, register, window};
+    return {bridge, watches, display, layout, manager, register, window, settings, actors, overview};
 }
 
 test('registered Wayland window becomes a desktop on its full monitor', () => {
@@ -120,4 +124,76 @@ test('unmapping cleans up, and disconnected monitors close their wallpaper', () 
     t.layout.emit('monitors-changed');
     assert.ok(other.closed);
     t.bridge.disable();
+});
+
+function fullscreen(t, appId, options = {}) {
+    const w = {is_fullscreen: () => true, minimized: false,
+        located_on_workspace: () => true, get_pid: () => 456,
+        get_window_type: () => 0, get_wm_class: () => appId,
+        get_wm_class_instance: () => null, ...options};
+    t.actors.push({meta_window: w});
+    return w;
+}
+test('fullscreen pauses globally; toggle and overview resume immediately', () => {
+    const t = setup();
+    assert.equal(t.bridge.GetPauseState(), false);
+    fullscreen(t, 'game');
+    assert.equal(t.bridge.GetPauseState(), true);
+    t.settings.enabled = false;
+    assert.equal(t.bridge.GetPauseState(), false);
+    t.settings.enabled = true;
+    t.overview.visible = true;
+    assert.equal(t.bridge.GetPauseState(), false);
+    t.overview.visible = false;
+    assert.equal(t.bridge.GetPauseState(), true);
+});
+test('blacklist ignores matching classes but another fullscreen app still pauses', () => {
+    const t = setup();
+    t.settings.classes = [' GAME '];
+    fullscreen(t, 'game');
+    assert.equal(t.bridge.GetPauseState(), false);
+    fullscreen(t, 'other-game');
+    assert.equal(t.bridge.GetPauseState(), true);
+});
+test('whitelist pauses only exact matching classes or class instances', () => {
+    const t = setup();
+    t.settings.mode = 'whitelist';
+    fullscreen(t, 'game');
+    assert.equal(t.bridge.GetPauseState(), false);
+    t.settings.whitelist = ['gam'];
+    assert.equal(t.bridge.GetPauseState(), false);
+    t.settings.whitelist = ['GAME'];
+    assert.equal(t.bridge.GetPauseState(), true);
+    t.settings.whitelist = ['instance'];
+    fullscreen(t, null, {get_wm_class_instance: () => 'Instance'});
+    assert.equal(t.bridge.GetPauseState(), true);
+});
+test('hidden, other-workspace, desktop and registered renderer windows never pause', () => {
+    const t = setup();
+    t.register();
+    fullscreen(t, 'minimized', {minimized: true});
+    fullscreen(t, 'elsewhere', {located_on_workspace: () => false});
+    fullscreen(t, 'desktop', {get_window_type: () => 1});
+    fullscreen(t, 'renderer', {get_pid: () => 123});
+    fullscreen(t, 'normal', {is_fullscreen: () => false});
+    assert.equal(t.bridge.GetPauseState(), false);
+});
+
+test('switching modes uses only the selected list, including overlapping entries', () => {
+    const t = setup();
+    t.settings.classes = ['browser'];
+    t.settings.whitelist = ['game'];
+    const window = fullscreen(t, 'browser');
+    assert.equal(t.bridge.GetPauseState(), false);
+    t.settings.mode = 'whitelist';
+    assert.equal(t.bridge.GetPauseState(), false, 'blacklist-only app must not trigger whitelist');
+    window.get_wm_class = () => 'game';
+    assert.equal(t.bridge.GetPauseState(), true);
+    t.settings.classes = ['game'];
+    assert.equal(t.bridge.GetPauseState(), true, 'blacklist must not veto a whitelist match');
+    t.settings.mode = 'blacklist';
+    assert.equal(t.bridge.GetPauseState(), false);
+    t.settings.mode = 'whitelist';
+    t.settings.whitelist = [];
+    assert.equal(t.bridge.GetPauseState(), false, 'empty whitelist must not fall back to blacklist');
 });

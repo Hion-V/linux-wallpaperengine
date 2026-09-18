@@ -8,6 +8,9 @@ import {BlurMyShellWallpapers} from './blurMyShell.js';
 
 const IFACE = `<node>
   <interface name="io.github.almamu.LinuxWallpaperEngine">
+    <method name="GetPauseState">
+      <arg name="paused" type="b" direction="out"/>
+    </method>
     <method name="Register">
       <arg name="connector" type="s" direction="in"/>
       <arg name="appId" type="s" direction="out"/>
@@ -18,6 +21,7 @@ const PATH = '/org/gnome/Shell/Extensions/LinuxWallpaperEngine';
 
 export default class WallpaperBridge extends Extension {
     enable() {
+        this._settings = this.getSettings();
         this._registrations = new Map();
         this._windows = new Map();
         const sourceForMonitor = index => {
@@ -76,6 +80,26 @@ export default class WallpaperBridge extends Extension {
     _refreshMirrors() {
         this._overview?.refresh();
         this._blurMyShell?.refresh();
+    }
+
+    GetPauseState() {
+        if (!this._settings.get_boolean('pause-on-fullscreen') || Main.overview.visible)
+            return false;
+        const whitelist = this._settings.get_string('filter-mode') === 'whitelist';
+        const classes = new Set(this._settings.get_strv(whitelist ? 'whitelist-window-classes' : 'window-classes')
+            .map(value => value.trim().toLowerCase()).filter(Boolean));
+        const workspace = global.workspace_manager.get_active_workspace();
+        const rendererPids = new Set([...this._registrations.values()].map(r => r.pid));
+        return global.get_window_actors().some(actor => {
+            const window = actor.meta_window;
+            if (!window.is_fullscreen() || window.minimized ||
+                !window.located_on_workspace(workspace) || rendererPids.has(window.get_pid()) ||
+                [Meta.WindowType.DESKTOP, Meta.WindowType.DOCK].includes(window.get_window_type()))
+                return false;
+            const matches = [window.get_wm_class(), window.get_wm_class_instance()]
+                .some(value => value && classes.has(value.toLowerCase()));
+            return whitelist ? matches : !matches;
+        });
     }
 
     _monitor(connector) {
@@ -173,5 +197,6 @@ export default class WallpaperBridge extends Extension {
         this._export = null;
         this._cancellable = null;
         this._bus = null;
+        this._settings = null;
     }
 }

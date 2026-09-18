@@ -2,7 +2,8 @@
 """Integration test against an installed GNOME 50, in a private D-Bus session.
 
 Usage: python3 tests/gnome-headless.py /path/to/linux-wallpaperengine /path/to/ffmpeg
-Requires gnome-shell, dconf, gdbus and dbus-run-session on PATH. Uses temporary
+Requires gnome-shell, dconf, gdbus, glib-compile-schemas and dbus-run-session on PATH.
+Set LWE_TEST_GJS to gjs (with GTK 3 typelibs available) to test fullscreen pausing. Uses temporary
 XDG directories, two virtual monitors, and a generated video (no Steam assets).
 """
 import argparse
@@ -51,6 +52,83 @@ def wait_for(fn, timeout=20):
             pass
         time.sleep(0.2)
     raise AssertionError('Timed out waiting for GNOME test condition')
+
+
+def test_fullscreen(directory, renderer_args):
+    fixture = directory / 'fullscreen.js'
+    fixture.write_text("""imports.gi.versions.Gtk = '3.0';
+const Gtk = imports.gi.Gtk;
+Gtk.init(null);
+const window = new Gtk.Window({title: 'Fullscreen pause test'});
+window.set_wmclass('lwe-pause-test', 'lwe-pause-test');
+window.fullscreen();
+window.show_all();
+Gtk.main();
+""")
+    env = {**os.environ, 'WAYLAND_DISPLAY': 'lwe-test', 'GDK_BACKEND': 'wayland', 'SDL_AUDIODRIVER': 'dummy'}
+    # A second independent renderer must observe the same global pause state.
+    with (directory / 'second-renderer.log').open('w') as log:
+        second = subprocess.Popen(renderer_args, stdout=log, stderr=subprocess.STDOUT, env=env)
+        game = None
+        try:
+            wait_for(lambda: len(state()['windows']) == 4)
+            subprocess.run(['gnome-extensions', 'prefs', UUID], env=env, check=True, timeout=10)
+            wait_for(lambda: any(a['title'] == 'Linux Wallpaper Engine Bridge' for a in state()['applications']))
+            action('close-preferences')
+            wait_for(lambda: not any(a['title'] == 'Linux Wallpaper Engine Bridge' for a in state()['applications']))
+            print('PASS: GNOME preferences window opens and closes without errors')
+            game = subprocess.Popen([os.environ['LWE_TEST_GJS'], str(fixture)], env=env)
+            wait_for(lambda: state()['paused'])
+            def paused_logs():
+                return all('Pausing wallpaper playback' in (directory / name).read_text()
+                           for name in ['renderer.log', 'second-renderer.log'])
+            wait_for(paused_logs)
+            current = state()
+            occupied = next(a['monitor'] for a in current['applications'] if a['fullscreen'])
+            x, y, width, height = current['monitors'][1 - occupied]
+            def pixels(name):
+                path = directory / f'{name}.png'
+                time.sleep(0.6)
+                call('/org/gnome/Shell/Screenshot', 'org.gnome.Shell.Screenshot.Screenshot',
+                     'false', 'false', str(path))
+                return subprocess.check_output([
+                    os.environ['LWE_TEST_FFMPEG'], '-v', 'error', '-i', str(path),
+                    '-vf', f'crop={width // 2}:{height // 2}:{x + width // 4}:{y + height // 4}',
+                    '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-',
+                ])
+            assert pixels('paused-a') == pixels('paused-b'), 'Uncovered wallpaper kept animating while paused'
+            action('setting:pause-on-fullscreen:false')
+            wait_for(lambda: not state()['paused'])
+            wait_for(lambda: all('Resuming wallpaper playback' in (directory / name).read_text()
+                                for name in ['renderer.log', 'second-renderer.log']))
+            assert pixels('resumed-a') != pixels('resumed-b'), 'Wallpaper did not resume rendering'
+            action('setting:pause-on-fullscreen:true')
+            wait_for(lambda: state()['paused'])
+            action('setting:window-classes:lwe-pause-test')
+            wait_for(lambda: not state()['paused'])
+            action('setting:whitelist-window-classes:lwe-pause-test')
+            action('setting:filter-mode:whitelist')
+            wait_for(lambda: state()['paused'])
+            action('setting:whitelist-window-classes:')
+            wait_for(lambda: not state()['paused'])
+            action('setting:window-classes:')
+            action('setting:filter-mode:blacklist')
+            wait_for(lambda: state()['paused'])
+            action('show')
+            wait_for(lambda: not state()['paused'])
+            action('hide')
+            wait_for(lambda: state()['paused'])
+            game.terminate()
+            game.wait(timeout=5)
+            wait_for(lambda: not state()['paused'])
+            print('PASS: fullscreen pauses two renderer processes; toggle, filters, overview and exit resume')
+        finally:
+            if game and game.poll() is None:
+                game.terminate()
+                game.wait(timeout=5)
+            second.terminate()
+            second.wait(timeout=10)
+            wait_for(lambda: len(state()['windows']) == 2)
 
 
 def inside(renderer, directory):
@@ -118,6 +196,8 @@ blur=false
                  'false', 'false', str(screenshot))
             assert screenshot.exists(), 'No rendered desktop screenshot'
             print(f'Desktop screenshot: {screenshot}')
+            if os.environ.get('LWE_TEST_GJS'):
+                test_fullscreen(directory, app.args)
             action('show')
             time.sleep(2)
             overview = state()
@@ -217,10 +297,14 @@ def main():
         inside(sys.argv[2], sys.argv[3])
         return
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--allow-host-compositor-test', action='store_true',
+                        help='Explicitly allow a compositor test; use a disposable VM, not a working desktop')
     parser.add_argument('renderer')
     parser.add_argument('ffmpeg')
     parser.add_argument('--blur-my-shell', type=Path, help='Installed Blur My Shell extension directory')
     args = parser.parse_args()
+    if not args.allow_host_compositor_test:
+        parser.error("Run this integration test in a disposable VM with --allow-host-compositor-test. A previous host test coincided with a desktop Shell crash.")
     renderer, ffmpeg = map(os.path.abspath, [args.renderer, args.ffmpeg])
     directory = Path(tempfile.mkdtemp(prefix='lwe-gnome-integration-'))
     print(f'Test artifacts: {directory}', flush=True)
@@ -228,6 +312,7 @@ def main():
         (directory / name).mkdir(mode=0o700)
     extension = directory / 'data/gnome-shell/extensions' / UUID
     shutil.copytree(ROOT / 'gnome-extension', extension)
+    subprocess.run(['glib-compile-schemas', '--strict', str(extension / 'schemas')], check=True)
     if args.blur_my_shell:
         shutil.copytree(args.blur_my_shell, extension.parent / BLUR_UUID)
     # Test instrumentation exists only in the temporary copy. The shipped bridge
@@ -240,7 +325,11 @@ def main():
         global.context.unsafe_mode = true;
         const rect = r => [r.x, r.y, r.width, r.height];
         return JSON.stringify({ready: !Main.layoutManager._startingUp,
-            overview: Main.overview.visible,
+            overview: Main.overview.visible, paused: this.GetPauseState(),
+            applications: global.get_window_actors().map(a => ({
+                title: a.meta_window.get_title(), class: a.meta_window.get_wm_class(),
+                fullscreen: a.meta_window.is_fullscreen(), monitor: a.meta_window.get_monitor(),
+            })),
             blurMirrors: [...this._blurMyShell._widgets.values()].map(r => ({
                 live: !!r.clone?.get_source(), effects: r.widget.get_effects().length,
             })),
@@ -258,6 +347,18 @@ def main():
             }))});
     }
     TestAction(action) {
+        if (action === 'close-preferences') {
+            for (const actor of global.get_window_actors()) {
+                if (actor.meta_window.get_title() === 'Linux Wallpaper Engine Bridge')
+                    actor.meta_window.delete(global.get_current_time());
+            }
+        }
+        if (action.startsWith('setting:')) {
+            const [, key, value] = action.split(':');
+            if (key === 'pause-on-fullscreen') this._settings.set_boolean(key, value === 'true');
+            else if (['window-classes', 'whitelist-window-classes'].includes(key)) this._settings.set_strv(key, value ? value.split(',') : []);
+            else this._settings.set_string(key, value);
+        }
         if (action === 'show') Main.overview.show();
         if (action === 'hide-cards' || action === 'show-cards') {
             for (const r of this._overview._targets.values()) r.actor.opacity = action === 'hide-cards' ? 0 : 255;
