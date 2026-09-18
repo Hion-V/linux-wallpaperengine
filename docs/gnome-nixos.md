@@ -256,3 +256,11 @@ not configure the GNOME bridge; use its preferences instead.
 
 Rebuild both flake packages and log out/in after upgrading the bridge. The Nix
 extension package includes the compiled settings schema and preferences window.
+
+### Panel visibility with an otherwise empty monitor
+
+The bridge prevents registered wallpaper windows from becoming direct-scanout
+candidates in Mutter 50. Wallpapers must be composited with Shell's panel even
+when no application or software cursor overlaps the monitor. This is separate
+from clearing the window's fullscreen state. Other applications remain eligible
+for direct scanout. The guard is removed when the wallpaper or extension closes.

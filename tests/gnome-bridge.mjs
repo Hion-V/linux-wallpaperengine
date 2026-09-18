@@ -30,6 +30,7 @@ function setup() {
         call_finish() { return {deep_unpack: () => [123]}; },
     };
     const context = vm.createContext({
+        Clutter: {Actor: class extends Signals { destroy() { this.destroyed = true; this.emit('destroy'); } }},
         Gio: {
             Cancellable: class { cancel() { this.cancelled = true; } is_cancelled() { return !!this.cancelled; } },
             DBus: {session: bus}, DBusCallFlags: {NONE: 0}, BusNameWatcherFlags: {NONE: 0},
@@ -57,7 +58,8 @@ function setup() {
     }
     function window(token, pid = 123) {
         const w = new Signals();
-        Object.assign(w, {get_wm_class: () => token, get_pid: () => pid, get_client_type: () => 1,
+        w.actor = {children: [], add_child(child) { this.children.push(child); }};
+        Object.assign(w, {get_compositor_private: () => w.actor, get_wm_class: () => token, get_pid: () => pid, get_client_type: () => 1,
             set_type(t) { this.type = t; }, hide_from_window_list() { this.hidden = true; },
             stick() { this.sticky = true; }, move_to_monitor(i) { this.monitor = i; },
             move_resize_frame(_user, ...rect) { this.rect = rect; }, lower() { this.lowered = true; },
@@ -196,4 +198,16 @@ test('switching modes uses only the selected list, including overlapping entries
     t.settings.mode = 'whitelist';
     t.settings.whitelist = [];
     assert.equal(t.bridge.GetPauseState(), false, 'empty whitelist must not fall back to blacklist');
+});
+
+test('only registered wallpaper actors receive a direct-scanout guard, removed on disable', () => {
+    const t = setup();
+    const ordinary = t.window('ordinary', 999);
+    assert.equal(ordinary.actor.children.length, 0);
+    const wallpaper = t.window(t.register().token);
+    assert.equal(wallpaper.actor.children.length, 1);
+    const guard = wallpaper.actor.children[0];
+    assert.ok(!guard.destroyed);
+    t.bridge.disable();
+    assert.equal(guard.destroyed, true);
 });
