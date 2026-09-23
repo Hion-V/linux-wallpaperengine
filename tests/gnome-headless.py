@@ -172,13 +172,25 @@ blur=false
         try:
             wait_for(lambda: state()['ready'])
             action('hide')
+            renderer_env = {**os.environ, 'WAYLAND_DISPLAY': 'lwe-test', 'SDL_AUDIODRIVER': 'dummy'}
+            app = subprocess.Popen([
+                renderer, '--assets-dir', str(directory / 'assets'), '--silent',
+                '--no-audio-processing', '--noautomute',
+                '--screen-root', 'Meta-0', '--bg', str(directory / 'wallpaper'),
+            ], stdout=renderer_log, stderr=subprocess.STDOUT, env=renderer_env)
+            wait_for(lambda: len(state()['windows']) == 1)
+            time.sleep(1)
+            assert app.poll() is None, 'Single-output renderer exited unexpectedly'
+            app.terminate()
+            assert app.wait(timeout=10) == 0, 'Single-output renderer did not exit cleanly'
+            wait_for(lambda: not state()['windows'])
+            print('PASS: one selected output ignores the unconfigured second monitor')
             app = subprocess.Popen([
                 renderer, '--assets-dir', str(directory / 'assets'), '--silent',
                 '--no-audio-processing', '--noautomute',
                 '--screen-root', 'Meta-0', '--bg', str(directory / 'wallpaper'),
                 '--screen-root', 'Meta-1', '--bg', str(directory / 'wallpaper'),
-            ], stdout=renderer_log, stderr=subprocess.STDOUT,
-                env={**os.environ, 'WAYLAND_DISPLAY': 'lwe-test', 'SDL_AUDIODRIVER': 'dummy'})
+            ], stdout=renderer_log, stderr=subprocess.STDOUT, env=renderer_env)
             current = wait_for(lambda: (s if len((s := state())['windows']) == 2 else None))
             # Let initial configure and the first video frames reach the compositor.
             time.sleep(3)

@@ -420,7 +420,11 @@ void WaylandOpenGLDriver::dispatchEventQueue () {
     renderingPaused = false;
     // Restart callback chains consumed while paused, including the initial frame.
     for (auto* viewport : m_screens) {
-        if (!viewport->closed && !viewport->frameCallback)
+        // m_screens also contains detected outputs that were not selected with
+        // --screen-root. Those viewports intentionally have no Wayland/EGL
+        // surface and must not enter the render callback chain.
+        if (!viewport->closed && viewport->surface && viewport->eglSurface != EGL_NO_SURFACE
+	    && !viewport->frameCallback)
             getApp ().update (viewport);
     }
 

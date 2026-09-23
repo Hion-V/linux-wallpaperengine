@@ -328,6 +328,12 @@ void WaylandOutputViewport::makeCurrent () {
 }
 
 void WaylandOutputViewport::swapOutput () {
+    // Unselected outputs are represented in the driver's screen list but do
+    // not own a render surface. Never submit a frame for such a viewport.
+    if (closed || !surface || !eglWindow || eglSurface == EGL_NO_SURFACE) {
+	return;
+    }
+
     this->callbackInitialized = true;
 
     this->makeCurrent ();
