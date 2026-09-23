@@ -87,7 +87,14 @@ public:
 	    return std::nullopt;
 	}
 
-	return *it;
+	try {
+	    return *it;
+	} catch (const std::exception&) {
+	    // Workshop projects are not consistent about the representation of optional fields.
+	    // Treat an incompatible value like an omitted one instead of terminating from this
+	    // noexcept helper.
+	    return std::nullopt;
+	}
     }
     template <typename T> [[nodiscard]] T optional (const std::string& key, T defaultValue) const noexcept {
 	auto base = this->base ();
@@ -97,7 +104,12 @@ public:
 	    return defaultValue;
 	}
 
-	return (*it);
+	try {
+	    return (*it);
+	} catch (const std::exception&) {
+	    // Optional values with an unexpected type should not make the whole wallpaper unusable.
+	    return defaultValue;
+	}
     }
     [[nodiscard]] UserSettingUniquePtr user (const std::string& key, const Properties& properties) const;
     template <typename T>
