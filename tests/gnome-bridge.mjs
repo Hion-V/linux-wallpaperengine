@@ -29,8 +29,12 @@ function setup() {
         call(_a, _b, _c, _d, _e, _f, _g, _h, _i, callback) { callback(this, {}); },
         call_finish() { return {deep_unpack: () => [123]}; },
     };
+    const compositor = {
+        inhibited: 0,
+        disable_unredirect() { this.inhibited++; },
+        enable_unredirect() { this.inhibited--; },
+    };
     const context = vm.createContext({
-        Clutter: {Actor: class extends Signals { destroy() { this.destroyed = true; this.emit('destroy'); } }},
         Gio: {
             Cancellable: class { cancel() { this.cancelled = true; } is_cancelled() { return !!this.cancelled; } },
             DBus: {session: bus}, DBusCallFlags: {NONE: 0}, BusNameWatcherFlags: {NONE: 0},
@@ -44,7 +48,7 @@ function setup() {
         BlurMyShellWallpapers: class { refresh() {} destroy() {} },
         OverviewWallpapers: class { refresh() {} destroy() {} },
         Extension: class { getSettings() { return settings; } }, Main: {layoutManager: layout, overview},
-        global: {display, get_window_actors: () => actors, workspace_manager: {get_active_workspace: () => 0}, backend: {get_monitor_manager: () => manager}, get_current_time: () => 0},
+        global: {display, compositor, get_window_actors: () => actors, workspace_manager: {get_active_workspace: () => 0}, backend: {get_monitor_manager: () => manager}, get_current_time: () => 0},
     });
     const source = readFileSync(new URL('../gnome-extension/extension.js', import.meta.url), 'utf8')
         .replace(/^import .*;\n/gm, '').replace('export default class WallpaperBridge', 'class WallpaperBridge');
@@ -61,15 +65,18 @@ function setup() {
         w.actor = {children: [], add_child(child) { this.children.push(child); }};
         Object.assign(w, {get_compositor_private: () => w.actor, get_wm_class: () => token, get_pid: () => pid, get_client_type: () => 1,
             set_type(t) { this.type = t; }, hide_from_window_list() { this.hidden = true; },
-            stick() { this.sticky = true; }, move_to_monitor(i) { this.monitor = i; },
-            move_resize_frame(_user, ...rect) { this.rect = rect; }, lower() { this.lowered = true; },
+            stick() { this.sticky = true; },
+            get_monitor() { return this.monitor ?? -1; },
+            get_frame_rect() { const [x, y, width, height] = this.rect ?? [0, 0, 0, 0]; return {x, y, width, height}; },
+            move_to_monitor(i) { this.monitor = i; this.monitorMoves = (this.monitorMoves ?? 0) + 1; },
+            move_resize_frame(_user, ...rect) { this.rect = rect; this.resizes = (this.resizes ?? 0) + 1; }, lower() { this.lowered = true; },
             is_fullscreen() { return !!this.fullscreen; },
             unmake_fullscreen() { this.fullscreen = false; this.unfullscreened = true; },
             delete() { this.closed = true; }});
         display.emit('window-created', w);
         return w;
     }
-    return {bridge, watches, display, layout, manager, register, window, settings, actors, overview};
+    return {bridge, watches, display, layout, manager, register, window, settings, actors, overview, compositor};
 }
 
 test('registered Wayland window becomes a desktop on its full monitor', () => {
@@ -200,14 +207,31 @@ test('switching modes uses only the selected list, including overlapping entries
     assert.equal(t.bridge.GetPauseState(), false, 'empty whitelist must not fall back to blacklist');
 });
 
-test('only registered wallpaper actors receive a direct-scanout guard, removed on disable', () => {
+test('registered wallpapers inhibit unredirect without mutating window actor children', () => {
     const t = setup();
     const ordinary = t.window('ordinary', 999);
     assert.equal(ordinary.actor.children.length, 0);
-    const wallpaper = t.window(t.register().token);
-    assert.equal(wallpaper.actor.children.length, 1);
-    const guard = wallpaper.actor.children[0];
-    assert.ok(!guard.destroyed);
+    const first = t.window(t.register().token);
+    assert.equal(first.actor.children.length, 0);
+    assert.equal(t.compositor.inhibited, 1);
+    const second = t.window(t.register().token);
+    assert.equal(second.actor.children.length, 0);
+    assert.equal(t.compositor.inhibited, 1, 'one bridge-level inhibitor covers every wallpaper');
+    first.emit('unmanaged');
+    assert.equal(t.compositor.inhibited, 1, 'remaining wallpaper keeps composition enabled');
     t.bridge.disable();
-    assert.equal(guard.destroyed, true);
+    assert.equal(t.compositor.inhibited, 0);
+});
+
+test('workspace visibility changes preserve geometry without repeated configure requests', () => {
+    const t = setup();
+    const wallpaper = t.window(t.register().token);
+    for (let i = 0; i < 5; i++) wallpaper.emit('shown');
+    assert.equal(wallpaper.monitorMoves, 1);
+    assert.equal(wallpaper.resizes, 1);
+    wallpaper.rect = [0, 0, 640, 480];
+    wallpaper.emit('shown');
+    assert.equal(wallpaper.resizes, 2);
+    assert.deepEqual(wallpaper.rect, [-1280, 0, 1280, 720]);
+    t.bridge.disable();
 });

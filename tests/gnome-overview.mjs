@@ -24,6 +24,7 @@ class Actor {
     get_width() { return this.width; }
     get_height() { return this.height; }
     allocate(box) { this.allocation = box; }
+    queue_redraw() { this.redraws = (this.redraws ?? 0) + 1; }
     set_child_above_sibling(child) {
         this.children.splice(this.children.indexOf(child), 1);
         this.children.push(child);
@@ -33,6 +34,7 @@ class Actor {
     add_effect(effect) { this.effect = effect; }
     destroy() {
         this.emit('destroy');
+        this.signals.clear(); // Native GObject destruction disconnects handlers.
         this.destroyed = true;
         if (this.parent) this.parent.children.splice(this.parent.children.indexOf(this), 1);
     }
@@ -188,4 +190,34 @@ test('large previews preserve source aspect ratio and crop centrally at every al
     container.layout_manager.vfunc_allocate(container, {get_width: () => 1200, get_height: () => 400});
     assert.ok(Math.abs(clone.allocation.width / 1080 - clone.allocation.height / 1920) < 1e-9);
     t.mirrors.destroy();
+});
+
+test('mixed-scale carousel invalidates preview content only on resource-scale changes', () => {
+    const t = setup();
+    const source = new Actor({width: 1920, height: 1080});
+    t.sources.set(0, source);
+    t.mirrors.refresh();
+    const {container, clone, effect} = t.mirrors._targets.get(t.existing);
+    assert.equal(container.redraws ?? 0, 0);
+    // 150% -> 100% crosses rounded resource scales 2 -> 1; test the return too.
+    for (const scale of [1, 2]) {
+        container.resourceScale = scale;
+        container.emit('resource-scale-changed');
+    }
+    assert.equal(container.redraws, 2);
+    for (let i = 0; i < 5; i++) t.mirrors.refresh();
+    assert.equal(container.redraws, 2, 'ordinary updates must not force continuous repaint');
+    assert.equal(t.mirrors._targets.get(t.existing).clone, clone);
+    assert.equal(t.mirrors._targets.get(t.existing).effect, effect);
+    t.sources.delete(0);
+    t.mirrors.refresh();
+    assert.equal(container.destroyed, true);
+    assert.equal(container.signals.size, 0);
+    t.sources.set(0, source);
+    t.mirrors.refresh();
+    const replacement = t.mirrors._targets.get(t.existing).container;
+    replacement.emit('resource-scale-changed');
+    assert.equal(replacement.redraws, 1);
+    t.mirrors.destroy();
+    assert.equal(replacement.signals.size, 0);
 });

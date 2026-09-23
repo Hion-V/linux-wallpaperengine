@@ -255,8 +255,13 @@ static void gnomeConfigure (void* data, xdg_surface* surface, uint32_t serial) {
     auto* viewport = static_cast<WaylandOutputViewport*> (data);
     xdg_surface_ack_configure (surface, serial);
     viewport->configured = true;
-    viewport->viewport = { 0, 0, viewport->size.x * viewport->scale, viewport->size.y * viewport->scale };
-    viewport->resize ();
+    const glm::ivec4 nextViewport { 0, 0, viewport->size.x * viewport->scale, viewport->size.y * viewport->scale };
+    // xdg configure also reports activation/suspension changes. Resizing on those
+    // events needlessly touches the EGL surface during workspace transitions.
+    if (!viewport->eglWindow)
+        viewport->viewport = nextViewport;
+    else if (viewport->viewport != nextViewport)
+        viewport->resize ();
 }
 
 static void gnomeToplevelConfigure (void* data, xdg_toplevel*, int32_t width, int32_t height, wl_array*) {

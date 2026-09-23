@@ -150,6 +150,13 @@ export class OverviewWallpapers {
                 });
                 record.container.add_child(record.clone);
                 record.container.add_effect(record.effect);
+                // Carousel cards can cross stage views with different monitor
+                // scales. OffscreenEffect must not reuse its old-resolution FBO
+                // with the new resource scale. Dirty the actor's content (not
+                // just the effect) before painting at the new scale.
+                // This handler belongs to the container and dies with it.
+                record.container.connect('resource-scale-changed', container =>
+                    container.queue_redraw());
                 actor._backgroundGroup.add_child(record.container);
             }
         }

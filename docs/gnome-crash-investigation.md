@@ -99,3 +99,133 @@ The upstream [Mutter 50.4 culling code](https://github.com/GNOME/mutter/blob/50.
 shows that this path inverts each eligible child's transform before calculating
 its visible region. The [Graphene 1.10.8 inverse implementation](https://github.com/ebassi/graphene/blob/1.10.8/include/graphene-simd4x4f.h)
 provides the corresponding matrix calculation.
+
+## Rapid slowdown and crash after the carousel repaint change
+
+On 2026-09-18 at 07:24:00, Shell PID 2171499 aborted with SIGABRT.
+At 07:23:44 its log reported `intel: the execbuf ioctl keeps returning ENOMEM`.
+The native stack contains `_iris_batch_flush.cold`, `iris_fence_flush`,
+`eglSwapBuffers`, and Mutter's stage redraw. This differs from the earlier
+Graphene SIGILL crashes and indicates a graphics resource/submission failure.
+
+The newly added JavaScript `vfunc_paint` override forced ACTOR_DIRTY for every
+preview paint. It is the leading regression suspect given the reported immediate
+slowdown after installation; exact resource retention has not been proven.
+It has been removed, together with the preceding source-allocation relayout
+experiment, restoring the pre-experiment overview implementation. Passing mock
+paint tests did not establish GPU-resource safety. No live-session test was run.
+The carousel flash remains unresolved. The rollback does not claim to fix the
+older rare SIGILL crash.
+
+Install the rebuilt extension before re-enabling this bridge, then log out/in
+so Shell discards the old JavaScript module. The rollback does not modify the
+installed extension, restart Shell, or re-enable any extensions automatically.
+
+## Carousel flash: mixed monitor resource scales
+
+A subsequent code review found a narrower hypothesis than window resizing or
+redrawing every frame. Read-only DisplayConfig inspection reported a left monitor
+at `(0, 0)` with scale 1.5 and the primary monitor at `(2560, 0)` with scale 1.0.
+
+In Mutter 50.4:
+
+- `clutter_actor_real_calculate_resource_scale()` selects the maximum scale of
+  the stage views associated with an actor. `get_resource_scale()` rounds up,
+  so these monitors can require texture scales 2 and 1 respectively.
+- `update_resource_scale()` emits `resource-scale-changed` when the rounded
+  value changes. The API explicitly instructs resource users to handle this
+  signal when their earlier scale estimate changes before painting.
+- `clutter_offscreen_effect_pre_paint()` sizes the texture using the resource
+  scale. `clutter_offscreen_effect_paint()` can reuse an existing offscreen
+  texture when ACTOR_DIRTY is absent. `paint_texture()` uses the *current*
+  resource scale to size the cached texture on screen.
+- Our `WallpaperOverviewClip` uses this offscreen effect, but its container
+  does not handle `resource-scale-changed`. The bridge listens to workspace
+  state adjustment, background changes and work-area changes instead; those
+  do not directly cover the carousel's monitor/resource-scale changes.
+
+If a preview's stage-view association changes from scale 2 to 1 without dirtying
+its cached offscreen content, its previous texture can be displayed twice as
+large and clipped to the card for a frame. This matches the reported appearance
+and is consistent with a previous workspace entering the primary monitor from
+the higher-scale monitor on its left. It has not been established that this
+specific transition actually changes the affected actor's resource scale or
+that no other redraw path invalidates the cache first.
+
+The narrow correction to investigate is invalidating the preview container's
+content on `resource-scale-changed`, using an ordinary actor redraw outside paint
+rather than overriding a paint virtual function or forcing every frame dirty.
+No new rendering change was applied during this inspection.
+
+A separate clipping assumption also warrants review: `OverviewClip` maps the
+whole offscreen texture's normalized coordinates directly to monitor dimensions.
+Clutter can pad the offscreen paint bounds, so texture coordinates are not
+necessarily exactly the container's normalized allocation. That can explain
+mask-edge errors, but does not by itself establish the directional one-frame
+image magnification.
+
+### Targeted resource-scale fix
+
+The user subsequently confirmed that the carousel flash disappears when the
+secondary monitor changes from 150% to 100%, matching the primary monitor.
+The preview container now handles `resource-scale-changed` by calling its own
+`queue_redraw()`, which invalidates actor content rather than merely repainting
+the effect's cached texture. The handler is owned by the container and removed
+when it is destroyed. There is no paint virtual override, timer, or unconditional
+per-frame redraw. Regression coverage checks both scale-change directions,
+absence of forced redraws during ordinary refreshes, and replacement/cleanup.
+The test uses mocked actors; visual confirmation at mixed scaling is still needed.
+
+## Recurrence at 2026-09-18 11:48:17
+
+Shell PID 2193494 again received SIGILL / ILL_ILLOPN at Graphene offset
+`0xafcc`, with the same `graphene_simd4x4f_inverse` ->
+`cull_out_children_common` -> `meta_compositor_real_before_paint` stack.
+This is the third recorded matching rare fault, distinct from the rapid
+Intel/Mesa ENOMEM abort after the reverted repaint experiment.
+
+Although the user was playing CS2, offline inspection identifies the current
+actor's window class as `code` (VS Code). The input matrix is identity plus
+translation `(-16, 19, 0)`, again nonsingular and finite. Thus neither CS2's
+window nor a particular translation is common to the two inspected cores.
+The executable mapping again has zero captured bytes, so the faulting instruction
+is reconstructed from the library on disk, not captured from RAM.
+
+Artifacts: `/tmp/lwe-shell-crash-2193494.core` and
+`/tmp/lwe-core-2193494-analysis.txt`. No compositor tests or session configuration
+changes were made. The next useful crash-capture improvement remains including
+file-backed executable mappings, to compare actual runtime instruction bytes.
+
+## Bridge actor-tree audit
+
+The bridge contained one unsafe compositor workaround: `_guardScanout()` added
+an empty `Clutter.Actor` directly to each wallpaper's `MetaWindowActor`. Mutter
+owns that actor's children and derives its direct-scanout candidate from their
+structure. Extensions should not add children to it. This was especially
+undesirable because the recurring crash is inside Mutter's recursive actor
+culling, although the captured actors and matrices do not identify that empty
+child as the faulting input.
+
+The workaround has been replaced with Mutter's public, reference-counted
+`Meta.Compositor.disable_unredirect()` API while wallpaper windows exist, with
+one matching `enable_unredirect()` when the last registration disappears. This
+keeps Shell composition active without changing `MetaWindowActor` internals.
+The inhibitor is global, so direct scanout is unavailable while the live
+wallpaper is connected; this favors correctness and compositor stability over
+the direct-scanout optimization.
+
+This unsafe child cannot explain the original recurring failure: the first two
+matching Graphene SIGILL crashes occurred before `_guardScanout()` was committed.
+The older overview integration clones the wallpaper `MetaWindowActor` into
+Shell's workspace actors. `Clutter.Clone` is also used by GNOME Shell for live
+window previews, and the bridge does not directly assign transforms to ordinary
+application actors. Its hooks into private `WorkspaceBackground` and
+`WorkspaceThumbnail` fields remain sensitive to GNOME Shell version changes,
+but an incompatible hook would ordinarily produce a JavaScript exception or a
+broken overview, not execute a supported SSE instruction as SIGILL.
+
+The audit therefore found and removed a real structural hazard without proving
+the cause of the three matching crashes. Their valid input matrices, varying
+current windows, identical native instruction address, and missing executable
+pages in the cores still point to the need for a better core capture and a
+stock-Mutter comparison.

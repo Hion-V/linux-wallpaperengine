@@ -1,4 +1,3 @@
-import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
@@ -25,6 +24,7 @@ export default class WallpaperBridge extends Extension {
         this._settings = this.getSettings();
         this._registrations = new Map();
         this._windows = new Map();
+        this._unredirectInhibited = false;
         const sourceForMonitor = index => {
             for (const registration of this._registrations.values()) {
                 if (registration.window && this._monitor(registration.connector) === index)
@@ -112,8 +112,6 @@ export default class WallpaperBridge extends Extension {
         this._windows.set(window, record);
         record.signals.push(window.connect('notify::wm-class', () => this._consider(window)));
         record.signals.push(window.connect('unmanaged', () => {
-            record.scanoutGuard?.destroy();
-            record.scanoutGuard = null;
             this._windows.delete(window);
             for (const signal of record.signals)
                 window.disconnect(signal);
@@ -149,29 +147,27 @@ export default class WallpaperBridge extends Extension {
         }));
         if (window.is_fullscreen())
             window.unmake_fullscreen();
-        this._guardScanout(window, record);
+        this._updateUnredirectInhibition();
         this._place(window, registration);
         window.lower();
         this._refreshMirrors();
         record.signals.push(window.connect('shown', () => {
-            this._guardScanout(window, record);
             this._place(window, registration);
             window.lower();
             this._refreshMirrors();
         }));
     }
 
-    _guardScanout(window, record) {
-        // Mutter 50 rejects direct scanout when the window actor's last child
-        // is not its native surface container. Keep this empty child above it:
-        // wallpaper must be composited together with Shell chrome, even when
-        // no application or software cursor overlaps this monitor.
-        const actor = window.get_compositor_private();
-        if (actor && !record.scanoutGuard) {
-            record.scanoutGuard = new Clutter.Actor({reactive: false});
-            record.scanoutGuard.connect('destroy', () => { record.scanoutGuard = null; });
-            actor.add_child(record.scanoutGuard);
-        }
+    _updateUnredirectInhibition() {
+        const shouldInhibit = [...this._registrations.values()]
+            .some(registration => registration.window !== null);
+        if (shouldInhibit === this._unredirectInhibited)
+            return;
+        this._unredirectInhibited = shouldInhibit;
+        if (shouldInhibit)
+            global.compositor.disable_unredirect();
+        else
+            global.compositor.enable_unredirect();
     }
 
     _place(window, registration) {
@@ -181,18 +177,21 @@ export default class WallpaperBridge extends Extension {
             return;
         }
         const {x, y, width, height} = global.display.get_monitor_geometry(index);
-        window.move_to_monitor(index);
-        window.move_resize_frame(false, x, y, width, height);
+        // Workspace/overview visibility changes must not reconfigure an already
+        // correctly placed surface: keep the last buffer available to clones.
+        if (window.get_monitor() !== index)
+            window.move_to_monitor(index);
+        const frame = window.get_frame_rect();
+        if (frame.x !== x || frame.y !== y || frame.width !== width || frame.height !== height)
+            window.move_resize_frame(false, x, y, width, height);
     }
 
     _revoke(token, close = true) {
         const registration = this._registrations.get(token);
         if (!registration)
             return;
-        const record = registration.window ? this._windows.get(registration.window) : null;
-        record?.scanoutGuard?.destroy();
-        if (record) record.scanoutGuard = null;
         this._registrations.delete(token);
+        this._updateUnredirectInhibition();
         this._refreshMirrors();
         Gio.bus_unwatch_name(registration.watch);
         if (close && registration.window)
@@ -209,8 +208,6 @@ export default class WallpaperBridge extends Extension {
         global.display.disconnect(this._created);
         Main.layoutManager.disconnect(this._monitors);
         for (const [window, record] of this._windows) {
-            record.scanoutGuard?.destroy();
-            record.scanoutGuard = null;
             for (const signal of record.signals)
                 window.disconnect(signal);
         }
@@ -221,5 +218,6 @@ export default class WallpaperBridge extends Extension {
         this._cancellable = null;
         this._bus = null;
         this._settings = null;
+        this._unredirectInhibited = false;
     }
 }
