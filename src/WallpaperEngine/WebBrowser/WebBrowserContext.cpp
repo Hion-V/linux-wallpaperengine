@@ -103,16 +103,14 @@ WebBrowserContext::~WebBrowserContext () {
 void WebBrowserContext::scheduleMessagePumpWork (int64_t delayMs) {
     // CEF replaces the previously scheduled request with each callback.
     std::lock_guard lock (m_pumpMutex);
-    m_nextPump = Clock::now () + std::chrono::milliseconds (std::max<int64_t> (0, delayMs));
+    m_pumpSchedule.schedule (delayMs);
     m_pumpWake.notify_one ();
 }
 
 void WebBrowserContext::pumpEvents () {
     {
         std::lock_guard lock (m_pumpMutex);
-        if (Clock::now () < m_nextPump) return;
-        // Clear before pumping: CEF may synchronously schedule its next task.
-        m_nextPump = Clock::time_point::max ();
+        if (!m_pumpSchedule.takeWork ()) return;
     }
     CefDoMessageLoopWork ();
 }
@@ -123,6 +121,6 @@ void WebBrowserContext::waitForEvents (double seconds) {
     while (Clock::now () < end) {
         pumpEvents ();
         std::unique_lock lock (m_pumpMutex);
-        m_pumpWake.wait_until (lock, std::min (end, m_nextPump));
+        m_pumpWake.wait_until (lock, std::min (end, m_pumpSchedule.deadline ()));
     }
 }

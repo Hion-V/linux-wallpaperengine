@@ -83,6 +83,8 @@
               ${./src}/WallpaperEngine/WebBrowser/CEF/RenderHandler.cpp \
               -o browser-render-upload-tests
             ./browser-render-upload-tests
+            c++ -std=c++20 -I${./src} ${./tests/browser-message-pump.cpp} -o browser-message-pump-tests
+            ./browser-message-pump-tests
             touch $out
           '';
           texture-container = pkgs.runCommand "texture-container-tests" {

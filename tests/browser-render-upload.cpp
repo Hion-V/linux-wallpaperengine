@@ -66,6 +66,9 @@ int main () {
     handler.uploadPendingPaint ();
     assert (texture == pixels && allocations == 2 && state == originalState);
     handler.detach ();
+    CefRect detachedRect;
+    handler.GetViewRect (nullptr, detachedRect);
+    assert (detachedRect.width == 1 && detachedRect.height == 1);
     paint ({{0, 0, 2, 2}});
     handler.uploadPendingPaint ();
     assert (uploads == 3);

@@ -8,7 +8,7 @@ RenderHandler::RenderHandler (WallpaperEngine::Render::Wallpapers::CWeb* webdata
 
 // Required by CEF
 void RenderHandler::GetViewRect (CefRefPtr<CefBrowser> browser, CefRect& rect) {
-    rect = CefRect (0, 0, this->m_webdata->getWidth (), this->m_webdata->getHeight ());
+    rect = CefRect (0, 0, getWidth (), getHeight ());
 }
 
 // Will be executed in CEF message loop

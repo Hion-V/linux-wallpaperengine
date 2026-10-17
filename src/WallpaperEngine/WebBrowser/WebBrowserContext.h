@@ -6,6 +6,8 @@
 #include "include/cef_browser_process_handler.h"
 #include "include/wrapper/cef_helpers.h"
 
+#include "MessagePumpSchedule.h"
+
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
@@ -32,7 +34,7 @@ private:
     using Clock = std::chrono::steady_clock;
     std::mutex m_pumpMutex;
     std::condition_variable m_pumpWake;
-    Clock::time_point m_nextPump = Clock::now ();
+    MessagePumpSchedule m_pumpSchedule;
     CefRefPtr<CefApp> m_browserApplication = nullptr;
     CefRefPtr<CefCommandLine> m_commandLine = nullptr;
     WallpaperEngine::Application::WallpaperApplication& m_wallpaperApplication;

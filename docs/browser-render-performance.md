@@ -78,3 +78,32 @@ at configured limits of 1, 10, and 37 FPS. Some private-display runs failed CEF
 GPU initialization; the 37 FPS check passed when rerun alone. These checks do
 not establish an FPS or CPU improvement on the live two-monitor desktop. The
 installed renderer and live wallpaper were not replaced during validation.
+
+## Black web wallpapers after the performance update
+
+The first external-pump implementation could set its next wakeup to infinity
+when CEF completed work without scheduling another task. With two browsers on
+the GNOME/Wayland desktop, the diagnostic renderer received no paint callbacks;
+the same renderer with one selected output received correctly sized paints and
+uploaded them without GL errors. The Xvfb single-browser checks did not cover
+this startup failure.
+
+CEF's own external-pump example guarantees periodic service even without another
+scheduling callback:
+https://github.com/chromiumembedded/cef/blob/7049/tests/shared/browser/main_message_loop_external_pump.cc
+
+`MessagePumpSchedule` now keeps a 33 ms fallback deadline, including after an
+otherwise idle pump. Delayed scheduling requests cannot push that fallback past
+33 ms from the last service. Clamp delays before converting them to clock
+intervals. The deterministic `browser-message-pump.cpp` test covers idle startup,
+repeated delayed requests, immediate requests, and very large delays. It runs
+alongside the existing upload test in the packaged Nix browser check.
+
+The corrected pinned Nix engine build and both packaged regression tests passed.
+On the actual GNOME/Wayland desktop, the same two-output XP web wallpaper was
+captured from both wallpaper FBOs five seconds after startup (1 FPS render limit,
+so CEF must make progress between render frames). Before the correction the
+capture was black; after it both the 1920×1080 and 3840×2160 views contained the
+wallpaper and characters. This validates the native two-output path missing from
+the original Xvfb checks. The desktop comparison used temporary renderer
+processes and did not replace the installed system package.
