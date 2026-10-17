@@ -84,9 +84,14 @@ export class BlurMyShellWallpapers {
             record.sourceDestroy = source.connect('destroy', () => this._clearClone(record));
             widget.add_child(record.clone);
         }
-        record.clone.set_position(0, 0);
-        record.clone.set_size(monitor.width, monitor.height);
-        widget.set_child_above_sibling(record.clone, null);
+        if (record.width !== monitor.width || record.height !== monitor.height) {
+            record.clone.set_position(0, 0);
+            record.clone.set_size(monitor.width, monitor.height);
+            record.width = monitor.width;
+            record.height = monitor.height;
+        }
+        if (widget.get_last_child() !== record.clone)
+            widget.set_child_above_sibling(record.clone, null);
     }
 
     _clearClone(record) {
@@ -96,6 +101,7 @@ export class BlurMyShellWallpapers {
         record.source = null;
         record.clone?.destroy();
         record.clone = null;
+        record.width = record.height = null;
     }
 
     _remove(widget) {

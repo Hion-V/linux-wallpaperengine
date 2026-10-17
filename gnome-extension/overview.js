@@ -29,12 +29,21 @@ class WallpaperOverviewClip extends Shell.GLSLEffect {
         `, false);
     }
 
+    invalidate() { this._values = null; }
+
     update(monitor, workArea, radius) {
-        this.set_uniform_float(this.get_uniform_location('wallpaper_size'),
-            2, [monitor.width, monitor.height]);
-        this.set_uniform_float(this.get_uniform_location('wallpaper_bounds'),
-            4, [workArea.x - monitor.x, workArea.y - monitor.y, workArea.width, workArea.height]);
-        this.set_uniform_float(this.get_uniform_location('wallpaper_radius'), 1, [radius]);
+        const values = [monitor.width, monitor.height, workArea.x - monitor.x, workArea.y - monitor.y,
+            workArea.width, workArea.height, radius];
+        const old = this._values;
+        if (!old || values.slice(0, 2).some((value, i) => value !== old[i]))
+            this.set_uniform_float(this.get_uniform_location('wallpaper_size'),
+                2, values.slice(0, 2));
+        if (!old || values.slice(2, 6).some((value, i) => value !== old[i + 2]))
+            this.set_uniform_float(this.get_uniform_location('wallpaper_bounds'),
+                4, values.slice(2, 6));
+        if (!old || radius !== old[6])
+            this.set_uniform_float(this.get_uniform_location('wallpaper_radius'), 1, [radius]);
+        this._values = values;
     }
 });
 
@@ -71,6 +80,7 @@ export class OverviewWallpapers {
     constructor(sourceForMonitor) {
         this._sourceForMonitor = sourceForMonitor;
         this._targets = new Map();
+        this._workAreaCache = new Map();
         this._injections = new InjectionManager();
         const mirrors = this;
         // Hook creation, including workspaces added while the overview is open.
@@ -111,6 +121,7 @@ export class OverviewWallpapers {
     }
 
     refresh() {
+        this._workAreaCache.clear();
         for (const record of this._targets.values())
             this._sync(record);
     }
@@ -125,6 +136,7 @@ export class OverviewWallpapers {
         record.container = null;
         record.clone = null;
         record.effect = null;
+        record.geometry = null;
     }
 
     _sync(record) {
@@ -155,20 +167,30 @@ export class OverviewWallpapers {
                 // with the new resource scale. Dirty the actor's content (not
                 // just the effect) before painting at the new scale.
                 // This handler belongs to the container and dies with it.
-                record.container.connect('resource-scale-changed', container =>
-                    container.queue_redraw());
+                record.container.connect('resource-scale-changed', container => {
+                    record.effect.invalidate();
+                    this._sync(record);
+                    container.queue_redraw();
+                });
                 actor._backgroundGroup.add_child(record.container);
             }
         }
         if (thumbnail) {
             // _contents is translated by the work area's stage coordinates.
-            record.clone.set_position(monitor.x, monitor.y);
-            record.clone.set_size(monitor.width, monitor.height);
+            const geometry = [monitor.x, monitor.y, monitor.width, monitor.height];
+            if (!record.geometry?.every((value, i) => value === geometry[i])) {
+                record.clone.set_position(monitor.x, monitor.y);
+                record.clone.set_size(monitor.width, monitor.height);
+                record.geometry = geometry;
+            }
         } else {
-            record.effect.update(monitor, Main.layoutManager.getWorkAreaForMonitor(index),
+            if (!this._workAreaCache.has(index))
+                this._workAreaCache.set(index, Main.layoutManager.getWorkAreaForMonitor(index));
+            record.effect.update(monitor, this._workAreaCache.get(index),
                 actor._bgManager.backgroundActor.content.rounded_clip_radius);
             // A settings change may have added a new background above our clone.
-            actor._backgroundGroup.set_child_above_sibling(record.container, null);
+            if (actor._backgroundGroup.get_last_child() !== record.container)
+                actor._backgroundGroup.set_child_above_sibling(record.container, null);
         }
     }
 
@@ -187,6 +209,7 @@ export class OverviewWallpapers {
         global.display.disconnect(this._workareas);
         for (const actor of this._targets.keys())
             this._remove(actor);
+        this._workAreaCache.clear();
         this._sourceForMonitor = null;
     }
 }

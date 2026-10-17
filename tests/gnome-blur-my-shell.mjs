@@ -17,6 +17,7 @@ class Actor {
             if (signal === name) callback(this, child);
     }
     get_children() { return [...this.children]; }
+    get_last_child() { return this.children.at(-1); }
     add_child(child) { this.children.push(child); child.parent = this; this.emit('child-added', child); }
     remove_child(child) {
         this.children.splice(this.children.indexOf(child), 1);
@@ -24,11 +25,12 @@ class Actor {
         this.emit('child-removed', child);
     }
     set_child_above_sibling(child) {
+        this.reorders = (this.reorders ?? 0) + 1;
         this.children.splice(this.children.indexOf(child), 1);
         this.children.push(child);
     }
-    set_position(x, y) { this.position = [x, y]; }
-    set_size(w, h) { this.size = [w, h]; }
+    set_position(x, y) { this.moves = (this.moves ?? 0) + 1; this.position = [x, y]; }
+    set_size(w, h) { this.resizes = (this.resizes ?? 0) + 1; this.size = [w, h]; }
     destroy() {
         this.emit('destroy');
         this.destroyed = true;
@@ -148,4 +150,20 @@ test('widget/source destruction and extension disable release clones and pending
     assert.equal(t.pending.size, 0);
     assert.equal(t.root.signals.size, 0);
     assert.equal(t.mirrors._widgets.size, 0);
+});
+
+test('unchanged blur mirrors skip resizing and restacking; replacement images restore stacking', () => {
+    const t = setup();
+    t.sources.set(0, new Actor()); t.addGroup();
+    const record = [...t.mirrors._widgets.values()][0];
+    const {clone, widget} = record;
+    const reorders = widget.reorders ?? 0;
+    for (let i = 0; i < 20; i++) t.mirrors.refresh();
+    assert.equal(clone.moves, 1);
+    assert.equal(clone.resizes, 1);
+    assert.equal(widget.reorders ?? 0, reorders);
+    widget.add_child(new BackgroundActor({monitor: 0})); t.flush();
+    assert.equal(widget.get_last_child(), clone);
+    assert.equal(widget.reorders, reorders + 1);
+    t.mirrors.destroy();
 });

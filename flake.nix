@@ -52,7 +52,7 @@
           });
           extension = pkgs.stdenvNoCC.mkDerivation {
             pname = "gnome-shell-extension-linux-wallpaperengine";
-            version = "4";
+            version = "5";
             src = ./gnome-extension;
             nativeBuildInputs = [ pkgs.glib ];
             dontBuild = true;

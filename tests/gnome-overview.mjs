@@ -19,6 +19,7 @@ class Actor {
     add_child(child) { this.insert_child_at_index(child, this.children.length); }
     insert_child_at_index(child, index) { this.children.splice(index, 0, child); child.parent = this; }
     get_children() { return [...this.children]; }
+    get_last_child() { return this.children.at(-1); }
     get_first_child() { return this.children[0]; }
     get_source() { return this.source; }
     get_width() { return this.width; }
@@ -26,11 +27,12 @@ class Actor {
     allocate(box) { this.allocation = box; }
     queue_redraw() { this.redraws = (this.redraws ?? 0) + 1; }
     set_child_above_sibling(child) {
+        this.reorders = (this.reorders ?? 0) + 1;
         this.children.splice(this.children.indexOf(child), 1);
         this.children.push(child);
     }
-    set_position(x, y) { this.position = [x, y]; }
-    set_size(w, h) { this.size = [w, h]; }
+    set_position(x, y) { this.moves = (this.moves ?? 0) + 1; this.position = [x, y]; }
+    set_size(w, h) { this.resizes = (this.resizes ?? 0) + 1; this.size = [w, h]; }
     add_effect(effect) { this.effect = effect; }
     destroy() {
         this.emit('destroy');
@@ -69,7 +71,7 @@ function setup() {
     class Effect {
         uniforms = new Map();
         get_uniform_location(name) { return name; }
-        set_uniform_float(name, _n, values) { this.uniforms.set(name, [...values]); }
+        set_uniform_float(name, _n, values) { this.updates = (this.updates ?? 0) + 1; this.uniforms.set(name, [...values]); }
     }
     const sources = new Map();
     const display = new Actor();
@@ -220,4 +222,25 @@ test('mixed-scale carousel invalidates preview content only on resource-scale ch
     assert.equal(replacement.redraws, 1);
     t.mirrors.destroy();
     assert.equal(replacement.signals.size, 0);
+});
+
+test('unchanged previews skip uniform uploads and restacking; radius updates only its uniform', () => {
+    const t = setup();
+    t.sources.set(0, new Actor({width: 1920, height: 1080}));
+    t.mirrors.refresh();
+    const record = t.mirrors._targets.get(t.existing);
+    const updates = record.effect.updates;
+    const reorders = t.existing._backgroundGroup.reorders;
+    for (let i = 0; i < 30; i++) t.existing._stateAdjustment.emit('notify::value');
+    assert.equal(record.effect.updates, updates);
+    assert.equal(t.existing._backgroundGroup.reorders, reorders);
+    t.existing._bgManager.backgroundActor.content.rounded_clip_radius = 42;
+    t.existing._stateAdjustment.emit('notify::value');
+    assert.equal(record.effect.updates, updates + 1);
+    const thumbnail = new t.Thumbnail(0);
+    const clone = t.mirrors._targets.get(thumbnail).clone;
+    for (let i = 0; i < 5; i++) t.mirrors.refresh();
+    assert.equal(clone.moves, 1);
+    assert.equal(clone.resizes, 1);
+    t.mirrors.destroy();
 });
