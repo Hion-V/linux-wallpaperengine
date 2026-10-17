@@ -59,7 +59,7 @@ WebBrowserContext::WebBrowserContext (WallpaperEngine::Application::WallpaperApp
     commandLine->InitFromArgv (main_args.argc, main_args.argv);
 
     if (!commandLine->HasSwitch ("type")) {
-	this->m_browserApplication = new CEF::BrowserApp (wallpaperApplication);
+	this->m_browserApplication = new CEF::BrowserApp (wallpaperApplication, *this);
     } else {
 	this->m_browserApplication = new CEF::SubprocessApp (wallpaperApplication);
     }
@@ -83,6 +83,7 @@ WebBrowserContext::WebBrowserContext (WallpaperEngine::Application::WallpaperApp
     //  CefString(&settings.browser_subprocess_path) = "path/to/client"
     cef_string_utf8_to_utf16 (cache_path.c_str (), cache_path.length (), &settings.root_cache_path);
     settings.windowless_rendering_enabled = true;
+    settings.external_message_pump = true;
 #if defined(CEF_NO_SANDBOX)
     settings.no_sandbox = true;
 #endif
@@ -97,4 +98,31 @@ WebBrowserContext::WebBrowserContext (WallpaperEngine::Application::WallpaperApp
 WebBrowserContext::~WebBrowserContext () {
     sLog.out ("Shutting down CEF");
     CefShutdown ();
+}
+
+void WebBrowserContext::scheduleMessagePumpWork (int64_t delayMs) {
+    // CEF replaces the previously scheduled request with each callback.
+    std::lock_guard lock (m_pumpMutex);
+    m_nextPump = Clock::now () + std::chrono::milliseconds (std::max<int64_t> (0, delayMs));
+    m_pumpWake.notify_one ();
+}
+
+void WebBrowserContext::pumpEvents () {
+    {
+        std::lock_guard lock (m_pumpMutex);
+        if (Clock::now () < m_nextPump) return;
+        // Clear before pumping: CEF may synchronously schedule its next task.
+        m_nextPump = Clock::time_point::max ();
+    }
+    CefDoMessageLoopWork ();
+}
+
+void WebBrowserContext::waitForEvents (double seconds) {
+    const auto end = Clock::now () + std::chrono::duration_cast<Clock::duration> (
+        std::chrono::duration<double> (std::max (0.0, seconds)));
+    while (Clock::now () < end) {
+        pumpEvents ();
+        std::unique_lock lock (m_pumpMutex);
+        m_pumpWake.wait_until (lock, std::min (end, m_nextPump));
+    }
 }

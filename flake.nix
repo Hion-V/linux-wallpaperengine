@@ -75,6 +75,16 @@
       checks = eachSystem (system:
         let pkgs = import nixpkgs { inherit system; };
         in {
+          browser-render-upload = pkgs.runCommand "browser-render-upload-tests" {
+            nativeBuildInputs = [ pkgs.stdenv.cc ];
+          } ''
+            c++ -std=c++20 -I${./tests/browser-render-stubs} -I${./src} \
+              ${./tests/browser-render-upload.cpp} \
+              ${./src}/WallpaperEngine/WebBrowser/CEF/RenderHandler.cpp \
+              -o browser-render-upload-tests
+            ./browser-render-upload-tests
+            touch $out
+          '';
           texture-container = pkgs.runCommand "texture-container-tests" {
             nativeBuildInputs = [ pkgs.stdenv.cc ];
             buildInputs = [ pkgs.glm pkgs.lz4 pkgs.nlohmann_json ];

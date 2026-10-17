@@ -3,8 +3,10 @@
 
 using namespace WallpaperEngine::WebBrowser::CEF;
 
-BrowserApp::BrowserApp (WallpaperEngine::Application::WallpaperApplication& application) :
-    SubprocessApp (application) { }
+BrowserApp::BrowserApp (WallpaperEngine::Application::WallpaperApplication& application, WebBrowserContext& context) :
+    SubprocessApp (application), m_context (context) { }
+
+void BrowserApp::OnScheduleMessagePumpWork (int64_t delayMs) { m_context.scheduleMessagePumpWork (delayMs); }
 
 CefRefPtr<CefBrowserProcessHandler> BrowserApp::GetBrowserProcessHandler () { return this; }
 

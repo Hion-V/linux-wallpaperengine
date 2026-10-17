@@ -28,11 +28,22 @@ public:
 	int height
     ) override;
 
+    // Called with this wallpaper's GL context current; CEF callbacks only stage pixels.
+    void uploadPendingPaint ();
+    void detach () { m_webdata = nullptr; }
+
     //! \brief CefBase interface
     IMPLEMENT_REFCOUNTING (RenderHandler);
 
 private:
     WallpaperEngine::Render::Wallpapers::CWeb* m_webdata = nullptr;
+
+    std::vector<unsigned char> m_pixels;
+    CefRect m_damage;
+    int m_paintWidth = 0;
+    int m_paintHeight = 0;
+    int m_textureWidth = 0;
+    int m_textureHeight = 0;
 
     [[nodiscard]] int getWidth () const;
     [[nodiscard]] int getHeight () const;

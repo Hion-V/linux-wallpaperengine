@@ -41,6 +41,9 @@ public:
      * Renders a frame of the application.
      */
     void render ();
+
+    // Keep Chromium responsive while the video driver waits for its next frame.
+    void waitForFrame (double seconds);
     /**
      * Cleans up all the resources used by the application.
      */

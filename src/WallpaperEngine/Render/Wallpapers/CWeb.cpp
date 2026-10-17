@@ -26,8 +26,9 @@ CWeb::CWeb (
     this->m_renderHandler = new WebBrowser::CEF::RenderHandler (this);
 
     CefBrowserSettings browserSettings;
-    // documentaion says that 60 fps is maximum value
-    browserSettings.windowless_frame_rate = std::max (60, context.getApp ().getContext ().settings.render.maximumFPS);
+    // CEF accepts windowless frame rates in [1, 60].
+    browserSettings.windowless_frame_rate = std::clamp (
+        context.getApp ().getContext ().settings.render.maximumFPS, 1, 60);
 
     this->m_client = new WebBrowser::CEF::BrowserClient (m_renderHandler);
     // use the custom scheme for the wallpaper's files
@@ -46,12 +47,6 @@ void CWeb::setSize (const int width, const int height) {
 	return;
     }
 
-    // reconfigure the texture
-    glBindTexture (GL_TEXTURE_2D, this->getWallpaperTexture ());
-    glTexImage2D (
-	GL_TEXTURE_2D, 0, GL_RGBA8, this->getWidth (), this->getHeight (), 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr
-    );
-
     // Notify cef that it was resized(maybe it's not even needed)
     this->m_browser->GetHost ()->WasResized ();
 }
@@ -69,15 +64,9 @@ void CWeb::renderFrame (const glm::ivec4& viewport) {
     // ensure we render over the whole framebuffer
     glViewport (0, 0, this->getWidth (), this->getHeight ());
 
-    // Cef processes all messages, including OnPaint, which renders frame
-    // If there is no OnPaint in message loop, we will not update(render) frame
-    //  This means some frames will not have OnPaint call in cef messageLoop
-    //  Because of that glClear will result in flickering on higher fps
-    //  Do not use glClear until some method to control rendering with cef is supported
-    // We might actually try to use cef to execute javascript, and not using off-screen rendering at all
-    // But for now let it be like this
-    //  glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    CefDoMessageLoopWork ();
+    // Upload only after this wallpaper's GL context is current. Browser work
+    // runs once globally, independently of per-output frame callbacks.
+    this->m_renderHandler->uploadPendingPaint ();
 }
 
 void CWeb::updateMouse (const glm::ivec4& viewport) {
@@ -116,8 +105,8 @@ void CWeb::updateMouse (const glm::ivec4& viewport) {
 }
 
 CWeb::~CWeb () {
-    CefDoMessageLoopWork ();
+    this->m_renderHandler->detach ();
     this->m_browser->GetHost ()->CloseBrowser (true);
 
-    delete this->m_renderHandler;
+    // m_client and CEF own reference-counted references to the render handler.
 }

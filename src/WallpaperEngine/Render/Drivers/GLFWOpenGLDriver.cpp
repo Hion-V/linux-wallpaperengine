@@ -156,7 +156,7 @@ void GLFWOpenGLDriver::dispatchEventQueue () {
 
     // ensure the frame time is correct to not overrun FPS
     if ((endTime - startTime) < minimumTime) {
-	usleep ((minimumTime - (endTime - startTime)) * CLOCKS_PER_SEC);
+	getApp ().waitForFrame (minimumTime - (endTime - startTime));
     }
 }
 

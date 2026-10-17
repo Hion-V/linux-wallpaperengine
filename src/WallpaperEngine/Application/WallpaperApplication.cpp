@@ -872,6 +872,11 @@ void WallpaperApplication::setup () {
 #endif /* DEMOMODE */
 }
 
+void WallpaperApplication::waitForFrame (double seconds) {
+    if (m_browserContext) m_browserContext->waitForEvents (seconds);
+    else if (seconds > 0) usleep (seconds * 1000000.0);
+}
+
 void WallpaperApplication::render () {
     static time_t seconds;
     static struct tm* timeinfo;
@@ -914,6 +919,8 @@ void WallpaperApplication::render () {
 	m_mediaSource->update ();
 	// update input information
 	m_videoDriver->getInputContext ().update ();
+	// Service all browsers once even when a surface receives no frame callback.
+        if (m_browserContext) m_browserContext->pumpEvents ();
 	// process driver events
 	m_videoDriver->dispatchEventQueue ();
 
