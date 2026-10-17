@@ -75,6 +75,20 @@
       checks = eachSystem (system:
         let pkgs = import nixpkgs { inherit system; };
         in {
+          texture-container = pkgs.runCommand "texture-container-tests" {
+            nativeBuildInputs = [ pkgs.stdenv.cc ];
+            buildInputs = [ pkgs.glm pkgs.lz4 pkgs.nlohmann_json ];
+          } ''
+            cp -r ${./src} src
+            c++ -std=c++20 -Wno-narrowing -ffunction-sections -fdata-sections \
+              -Isrc ${./tests/texture-container.cpp} \
+              src/WallpaperEngine/Data/Parsers/TextureParser.cpp \
+              src/WallpaperEngine/Data/Utils/BinaryReader.cpp \
+              src/WallpaperEngine/Logging/Log.cpp \
+              -Wl,--gc-sections -llz4 -o texture-container-tests
+            ./texture-container-tests
+            touch $out
+          '';
           bridge = pkgs.runCommand "gnome-bridge-tests" { nativeBuildInputs = [ pkgs.nodejs ]; } ''
             cp -r ${./gnome-extension} gnome-extension
             mkdir tests

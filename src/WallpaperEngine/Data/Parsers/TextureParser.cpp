@@ -213,14 +213,12 @@ void TextureParser::parseContainer (Texture& header, const BinaryReader& file) {
     if (strncmp (magic, "TEXB0004", 9) == 0) {
 	header.containerVersion = ContainerVersion_TEXB0004;
 	header.freeImageFormat = parseFIF (file.nextUInt32 ());
-	header.isVideoMp4 = file.nextUInt32 () == 1;
+	// This field selects the extended mipmap headers (including JSON
+	// metadata). Static PNG textures can use them too; it is not a video flag.
+	const bool hasExtendedMipmaps = file.nextUInt32 () == 1;
+	header.isVideoMp4 = header.freeImageFormat == FIF_MP4 || (header.flags & TextureFlags_Video);
 
-	if (header.freeImageFormat == FIF_UNKNOWN && header.isVideoMp4) {
-	    header.freeImageFormat = FIF_MP4;
-	}
-
-	// default to TEXB0003 format here
-	if (header.freeImageFormat != FIF_MP4) {
+	if (!hasExtendedMipmaps && header.freeImageFormat != FIF_MP4) {
 	    header.containerVersion = ContainerVersion_TEXB0003;
 	}
     } else if (strncmp (magic, "TEXB0003", 9) == 0) {

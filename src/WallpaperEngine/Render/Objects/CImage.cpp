@@ -766,6 +766,25 @@ void CImage::setup () {
 	));
     }
 
+    // Mesh vertices are in layer space. Even without effects, rasterize the mesh
+    // locally before placing its texture in the scene with the screen-space quad.
+    if (this->m_hasPuppetMesh && this->m_passes.size () == 1) {
+	auto copy = std::make_unique<MaterialPass> (MaterialPass {
+	    .blending = BlendingMode_Normal,
+	    .cullmode = CullingMode_Disable,
+	    .depthtest = DepthtestMode_Disabled,
+	    .depthwrite = DepthwriteMode_Disabled,
+	    .shader = "commands/copyprojected",
+	    .textures = {},
+	    .combos = {},
+	    .constants = {},
+	});
+	const auto& config = *this->m_virtualPassess.emplace_back (std::move (copy));
+	this->m_passes.push_back (new CPass (
+	    *this, std::make_shared<FBOProvider> (this), config, std::nullopt, std::nullopt, std::nullopt
+	));
+    }
+
     // if there's more than one pass the blendmode has to be moved from the beginning to the end
     if (this->m_passes.size () > 1) {
 	const auto first = this->m_passes.begin ();
@@ -773,6 +792,12 @@ void CImage::setup () {
 
 	(*last)->setBlendingMode ((*first)->getBlendingMode ());
 	(*first)->setBlendingMode (BlendingMode_Normal);
+    }
+
+    // Pixels outside the mesh are transparent, including when its source
+    // material replaces pixels. Preserve the scene beneath those empty pixels.
+    if (this->m_hasPuppetMesh && this->m_passes.back ()->getBlendingMode () == BlendingMode_Normal) {
+	this->m_passes.back ()->setBlendingMode (BlendingMode_Translucent);
     }
 
     CRenderable::setup ();
@@ -811,7 +836,7 @@ void CImage::setupPasses () {
 	first = false;
 
 	if (isFirstPass && this->m_hasPuppetMesh) {
-	    pass->setBlendingMode (BlendingMode_Translucent);
+	    pass->setBlendingMode (BlendingMode_Normal);
 	    this->setupPuppetGeometryCallback (pass);
 	}
 

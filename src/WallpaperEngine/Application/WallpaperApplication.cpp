@@ -176,6 +176,26 @@ AssetLocatorUniquePtr WallpaperApplication::setupAssetLocator (const std::string
 	"}"
     );
 
+    vfs.add (
+	"shaders/commands/copyprojected.frag",
+	"uniform sampler2D g_Texture0;\n"
+	"in vec2 v_TexCoord;\n"
+	"void main () {\n"
+	"out_FragColor = texture (g_Texture0, v_TexCoord);\n"
+	"}"
+    );
+    vfs.add (
+	"shaders/commands/copyprojected.vert",
+	"uniform mat4 g_ModelViewProjectionMatrix;\n"
+	"in vec3 a_Position;\n"
+	"in vec2 a_TexCoord;\n"
+	"out vec2 v_TexCoord;\n"
+	"void main () {\n"
+	"gl_Position = g_ModelViewProjectionMatrix * vec4 (a_Position, 1.0);\n"
+	"v_TexCoord = a_TexCoord;\n"
+	"}"
+    );
+
     return std::make_unique<AssetLocator> (std::move (container));
 }
 
