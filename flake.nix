@@ -59,7 +59,7 @@
             installPhase = ''
               mkdir -p $out/share/gnome-shell/extensions/linux-wallpaperengine@almamu.github.io
               glib-compile-schemas --strict schemas
-              cp -r schemas prefs.js extension.js overview.js blurMyShell.js metadata.json $out/share/gnome-shell/extensions/linux-wallpaperengine@almamu.github.io/
+              cp -r schemas prefs.js extension.js overview.js blurMyShell.js workspaceSpacing.js metadata.json $out/share/gnome-shell/extensions/linux-wallpaperengine@almamu.github.io/
             '';
             passthru.extensionUuid = "linux-wallpaperengine@almamu.github.io";
             meta = { platforms = systems; license = pkgs.lib.licenses.gpl3Plus; };

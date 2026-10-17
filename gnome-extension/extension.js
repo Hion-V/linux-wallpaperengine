@@ -5,6 +5,7 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {OverviewWallpapers} from './overview.js';
 import {BlurMyShellWallpapers} from './blurMyShell.js';
+import {WallpaperWorkspaceSpacing} from './workspaceSpacing.js';
 
 const IFACE = `<node>
   <interface name="io.github.almamu.LinuxWallpaperEngine">
@@ -33,6 +34,7 @@ export default class WallpaperBridge extends Extension {
             return null;
         };
         this._overview = new OverviewWallpapers(sourceForMonitor);
+        this._workspaceSpacing = new WallpaperWorkspaceSpacing(sourceForMonitor);
         this._blurMyShell = new BlurMyShellWallpapers(sourceForMonitor);
         this._cancellable = new Gio.Cancellable();
         this._bus = Gio.DBus.session;
@@ -199,6 +201,8 @@ export default class WallpaperBridge extends Extension {
     }
 
     disable() {
+        this._workspaceSpacing.destroy();
+        this._workspaceSpacing = null;
         this._blurMyShell.destroy();
         this._blurMyShell = null;
         this._overview.destroy();

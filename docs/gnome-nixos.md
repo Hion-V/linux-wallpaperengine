@@ -120,6 +120,9 @@ The desktop surface stays in Mutter's window group. In Activities, live Clutter
 clones supply each monitor's wallpaper to the large workspace previews and the
 small thumbnail strip, behind application previews. Scoped, reversible hooks on
 GNOME 50's overview actor constructors also cover newly created workspaces.
+During desktop workspace switches, monitors with a running wallpaper omit
+GNOME's scale-dependent inter-workspace spacing so adjacent wallpaper copies
+meet edge-to-edge. Disabling the extension restores the original spacing.
 Large previews use uniform scaling with centered cropping, preserving the
 wallpaper's aspect ratio as the card changes size. Clones follow GNOME's work-area
 cropping and rounded preview corners, and are
@@ -168,6 +171,7 @@ nix flake check path:.
 # Or run the bridge lifecycle tests directly:
 node tests/gnome-bridge.mjs
 node tests/gnome-overview.mjs
+node tests/gnome-workspace-spacing.mjs
 node tests/gnome-blur-my-shell.mjs
 node tests/gnome-preferences.mjs
 ```

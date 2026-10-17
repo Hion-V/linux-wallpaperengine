@@ -47,6 +47,7 @@ function setup() {
         Meta: {is_wayland_compositor: () => true, WindowType: {DESKTOP: 1}, WindowClientType: {WAYLAND: 1}},
         BlurMyShellWallpapers: class { refresh() {} destroy() {} },
         OverviewWallpapers: class { refresh() {} destroy() {} },
+        WallpaperWorkspaceSpacing: class { destroy() {} },
         Extension: class { getSettings() { return settings; } }, Main: {layoutManager: layout, overview},
         global: {display, compositor, get_window_actors: () => actors, workspace_manager: {get_active_workspace: () => 0}, backend: {get_monitor_manager: () => manager}, get_current_time: () => 0},
     });
