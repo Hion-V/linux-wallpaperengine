@@ -129,7 +129,11 @@ void CPass::setupRenderFramebuffer () const {
     switch (this->getBlendingMode ()) {
 	case BlendingMode_Translucent:
 	    glEnable (GL_BLEND);
-	    glBlendFuncSeparate (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	    glBlendFuncSeparate (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+	    break;
+	case BlendingMode_Premultiplied:
+	    glEnable (GL_BLEND);
+	    glBlendFuncSeparate (GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 	    break;
 	case BlendingMode_Additive:
 	    glEnable (GL_BLEND);

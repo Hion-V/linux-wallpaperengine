@@ -150,6 +150,7 @@ ObjectParser::parseImage (const JSON& it, const Project& project, ObjectData bas
     auto result = std::make_unique<Image> (
 	std::move (base),
 	ImageData {
+	    .copyBackground = it.optional ("copybackground", false),
 	    .scale = it.user ("scale", properties, glm::vec3 (1.0f)),
 	    .angles = it.user ("angles", properties, glm::vec3 (0.0f)),
 	    .visible = it.user ("visible", properties, true),

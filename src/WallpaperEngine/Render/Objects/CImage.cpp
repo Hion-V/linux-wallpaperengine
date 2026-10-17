@@ -21,6 +21,7 @@
 #include "WallpaperEngine/Data/Parsers/MaterialParser.h"
 #include "WallpaperEngine/Data/Utils/BinaryReader.h"
 #include "WallpaperEngine/Data/Utils/MemoryStream.h"
+#include "WallpaperEngine/Data/Utils/ScopeGuard.h"
 #include "WallpaperEngine/Logging/Log.h"
 
 using namespace WallpaperEngine;
@@ -193,6 +194,25 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     glm::vec3 scale = transform.scale;
 
     this->detectTexture ();
+
+    // Composition layers collect their children before applying their effects.
+    // Use scene coordinates for this input; the composelayer shader crops it to
+    // the authored layer bounds before running the local effect chain.
+    if (image.model->passthrough && !image.model->material->passes.empty ()
+	&& image.model->material->passes.front ()->shader == "composelayer") {
+	const bool hasImageChildren = std::any_of (
+	    scene.getScene ().objects.begin (), scene.getScene ().objects.end (), [&image] (const auto& child) {
+		return child->parent == image.id && child->template is<Image> ();
+	    }
+	);
+	if (hasImageChildren) {
+	    this->m_compositionFBO = this->create (
+		"_rt_FullFrameBuffer", TextureFormat_ARGB8888, TextureFlags_ClampUVsBorder, 1.0f,
+		{ scene_width, scene_height }, { scene_width, scene_height }
+	    );
+	    this->m_texture = this->m_compositionFBO;
+	}
+    }
 
     // detect texture (if any)
     if (this->m_texture == nullptr) {
@@ -602,7 +622,7 @@ void CImage::setup () {
     // TODO: CHECK ORDER OF THINGS, 2419444134'S ID 27 DEPENDS ON 104'S COMPOSITE_A WHEN OUR LAST RENDER IS ON
     // COMPOSITE_B
     // TODO: SUPPORT PASSTHROUGH (IT'S A SHADER)
-    if (this->m_image.model->passthrough) {
+    if (this->m_image.model->passthrough && !this->isCompositionGroup ()) {
 	// passthrough images without effects are bad, do not draw them
 	if (this->m_image.effects.empty ()) {
 	    return;
@@ -766,9 +786,9 @@ void CImage::setup () {
 	));
     }
 
-    // Mesh vertices are in layer space. Even without effects, rasterize the mesh
-    // locally before placing its texture in the scene with the screen-space quad.
-    if (this->m_hasPuppetMesh && this->m_passes.size () == 1) {
+    // Mesh and composition inputs are rasterized locally. Even without effects,
+    // place their resulting texture in the scene with a separate screen quad.
+    if ((this->m_hasPuppetMesh || this->isCompositionGroup ()) && this->m_passes.size () == 1) {
 	auto copy = std::make_unique<MaterialPass> (MaterialPass {
 	    .blending = BlendingMode_Normal,
 	    .cullmode = CullingMode_Disable,
@@ -798,6 +818,9 @@ void CImage::setup () {
     // material replaces pixels. Preserve the scene beneath those empty pixels.
     if (this->m_hasPuppetMesh && this->m_passes.back ()->getBlendingMode () == BlendingMode_Normal) {
 	this->m_passes.back ()->setBlendingMode (BlendingMode_Translucent);
+    }
+    if (this->isCompositionGroup ()) {
+	this->m_passes.back ()->setBlendingMode (BlendingMode_Premultiplied);
     }
 
     CRenderable::setup ();
@@ -931,6 +954,24 @@ void CImage::pinpongFramebuffer (std::shared_ptr<const CFBO>* drawTo, std::share
     this->m_currentSubFBO = currentMainFBO;
 }
 
+void CImage::renderTo (std::shared_ptr<const CFBO> destination) {
+    if (!this->m_initialized || this->m_passes.empty ()) {
+	return;
+    }
+    auto* finalPass = this->m_passes.back ();
+    const auto previousDestination = finalPass->getDestination ();
+    const bool previousComposition = this->m_renderingToComposition;
+    ScopeGuard restore ([&] {
+	finalPass->setDestination (previousDestination);
+	this->m_renderingToComposition = previousComposition;
+    });
+    if (previousDestination == this->getScene ().getFBO ()) {
+	finalPass->setDestination (std::move (destination));
+    }
+    this->m_renderingToComposition = true;
+    this->render ();
+}
+
 void CImage::render () {
     // do not try to render something that did not initialize successfully
     if (!this->m_initialized) {
@@ -942,6 +983,34 @@ void CImage::render () {
     }
 
     glColorMask (true, true, true, true);
+
+    if (this->isCompositionGroup ()) {
+	const auto& source = this->getScene ().getFBO ();
+	glBindFramebuffer (GL_DRAW_FRAMEBUFFER, this->m_compositionFBO->getFramebuffer ());
+	GLfloat clearColor[4];
+	glGetFloatv (GL_COLOR_CLEAR_VALUE, clearColor);
+	glClearColor (0.0f, 0.0f, 0.0f, 0.0f);
+	glClear (GL_COLOR_BUFFER_BIT);
+	glClearColor (clearColor[0], clearColor[1], clearColor[2], clearColor[3]);
+	if (this->getImage ().copyBackground) {
+	    glBindFramebuffer (GL_READ_FRAMEBUFFER, source->getFramebuffer ());
+	    glBlitFramebuffer (
+		0, 0, source->getRealWidth (), source->getRealHeight (),
+		0, 0, source->getRealWidth (), source->getRealHeight (), GL_COLOR_BUFFER_BIT, GL_NEAREST
+	    );
+	}
+	const auto& debug = this->getScene ().getContext ().getApp ().getContext ().settings.render.debug;
+	for (auto* child : this->getScene ().getObjectsByRenderOrder ()) {
+	    if (child->getObject ().parent != this->getId () || !child->is<CImage> ()) {
+		continue;
+	    }
+	    if (std::find (debug.skipObjects.begin (), debug.skipObjects.end (), child->getId ()) != debug.skipObjects.end ()) {
+		continue;
+	    }
+	    child->as<CImage> ()->renderTo (this->m_compositionFBO);
+	}
+	glColorMask (true, true, true, true);
+    }
 
     // Always update screen transform (handles rotation + parallax dynamically)
     this->updateScreenSpacePosition ();
@@ -963,7 +1032,7 @@ void CImage::render () {
 
     for (const auto end = this->m_passes.end (); cur != end; ++cur) {
 	if (std::next (cur) == end) {
-	    glColorMask (true, true, true, false);
+	    glColorMask (true, true, true, this->m_renderingToComposition);
 	}
 
 	(*cur)->render ();
@@ -1155,6 +1224,12 @@ void CImage::updateScreenSpacePosition () {
 const Image& CImage::getImage () const { return this->m_image; }
 
 glm::vec2 CImage::getSize () const {
+    // A passthrough texture is the scene input, not the layer's geometry.
+    // Its dimensions must not replace an explicitly authored composition size.
+    if (this->getImage ().model->passthrough && this->getImage ().size.x > 0.0f
+	&& this->getImage ().size.y > 0.0f) {
+	return this->getImage ().size;
+    }
     if (this->m_texture == nullptr) {
 	return this->getImage ().size;
     }

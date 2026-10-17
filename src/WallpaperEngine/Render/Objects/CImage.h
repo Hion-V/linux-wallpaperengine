@@ -31,6 +31,8 @@ public:
 
     void setup () override;
     void render () override;
+    void renderTo (std::shared_ptr<const CFBO> destination);
+    [[nodiscard]] bool isCompositionGroup () const { return m_compositionFBO != nullptr; }
 
     [[nodiscard]] const Image& getImage () const;
     [[nodiscard]] glm::vec2 getSize () const;
@@ -129,6 +131,8 @@ private:
     glm::vec2 m_size = {};
 
     bool m_initialized = false;
+    std::shared_ptr<CFBO> m_compositionFBO;
+    bool m_renderingToComposition = false;
 
     struct {
 	struct {

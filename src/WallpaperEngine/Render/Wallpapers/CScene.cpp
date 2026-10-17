@@ -350,6 +350,15 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 
     for (const auto& cur : this->m_objectsByRenderOrder) {
 	const auto& debug = this->getContext ().getApp ().getContext ().settings.render.debug;
+	// Image children of a composition are rendered into that parent's input,
+	// before its warp effects, rather than separately over the finished scene.
+	if (cur->is<Objects::CImage> () && cur->getObject ().parent.has_value ()) {
+	    const auto* parent = this->getObject (*cur->getObject ().parent);
+	    if (parent != nullptr && parent->is<Objects::CImage> ()
+		&& parent->as<Objects::CImage> ()->isCompositionGroup ()) {
+		continue;
+	    }
+	}
 	if (debug.objectFilter.has_value () && cur->getId () != debug.objectFilter.value ()) {
 	    continue;
 	}

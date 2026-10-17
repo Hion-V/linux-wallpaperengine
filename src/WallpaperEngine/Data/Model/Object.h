@@ -96,6 +96,7 @@ struct ImageAnimationLayer {
 };
 
 struct ImageData {
+    bool copyBackground = false;
     /** The scale of the image */
     UserSettingUniquePtr scale;
     /** The rotation of the image */

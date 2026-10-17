@@ -34,6 +34,7 @@ public:
     void render ();
 
     void setDestination (std::shared_ptr<const CFBO> drawTo);
+    [[nodiscard]] std::shared_ptr<const CFBO> getDestination () const { return m_drawTo; }
     void setInput (std::shared_ptr<const TextureProvider> input);
     void setPreviousInput (std::shared_ptr<const TextureProvider> input);
     void setTexCoord (GLuint texcoord);
