@@ -3,9 +3,10 @@ import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
-// Blur My Shell v72 puts an image BackgroundActor inside each of these widgets
-// and applies its selected effect pipeline to the widget. A live child is thus
-// processed by the same effects, without replacing its pipeline or settings.
+// Blur My Shell applies its selected effect pipeline to each of these widgets.
+// v72 put the image BackgroundActor directly inside the widget; v73 and newer
+// put it in a source container. A live child of the effect widget is processed
+// by the same effects without replacing its pipeline or settings.
 const GROUP_NAME = 'bms-overview-backgroundgroup';
 const WIDGET_NAME = 'bms-overview-blurred-widget';
 
@@ -55,23 +56,60 @@ export class BlurMyShellWallpapers {
         }
         for (const widget of widgets) {
             if (!this._widgets.has(widget)) {
-                const record = {widget, clone: null, source: null, sourceDestroy: 0, signals: []};
+                const record = {widget, clone: null, source: null, sourceDestroy: 0,
+                    signals: [], childSignals: new Map()};
                 this._widgets.set(widget, record);
-                for (const signal of ['child-added', 'child-removed']) {
-                    record.signals.push(widget.connect(signal, (_actor, child) => {
-                        if (child !== record.clone)
-                            this._queueRefresh();
-                    }));
-                }
                 record.signals.push(widget.connect('destroy', () => this._remove(widget)));
             }
+            this._watchTree(this._widgets.get(widget));
             this._sync(this._widgets.get(widget));
         }
     }
 
+    _watchTree(record) {
+        const actors = new Set();
+        const visit = actor => {
+            if (actor === record.clone || actors.has(actor))
+                return;
+            actors.add(actor);
+            for (const child of actor.get_children())
+                visit(child);
+        };
+        visit(record.widget);
+        for (const [actor, ids] of record.childSignals) {
+            if (actors.has(actor))
+                continue;
+            for (const id of ids)
+                actor.disconnect(id);
+            record.childSignals.delete(actor);
+        }
+        for (const actor of actors) {
+            if (record.childSignals.has(actor))
+                continue;
+            record.childSignals.set(actor, ['child-added', 'child-removed'].map(signal =>
+                actor.connect(signal, (_parent, child) => {
+                    if (child !== record.clone)
+                        this._queueRefresh();
+                })));
+        }
+    }
+
+    _findBackground(actor, clone) {
+        for (const child of actor.get_children()) {
+            if (child === clone)
+                continue;
+            if (child instanceof Meta.BackgroundActor)
+                return child;
+            const background = this._findBackground(child, clone);
+            if (background)
+                return background;
+        }
+        return null;
+    }
+
     _sync(record) {
         const {widget} = record;
-        const background = widget.get_children().find(actor => actor instanceof Meta.BackgroundActor);
+        const background = this._findBackground(widget, record.clone);
         const monitor = background ? Main.layoutManager.monitors[background.monitor] : null;
         const source = monitor ? this._sourceForMonitor(background.monitor) : null;
         if (source !== record.source)
@@ -111,6 +149,11 @@ export class BlurMyShellWallpapers {
         this._widgets.delete(widget);
         for (const id of record.signals)
             widget.disconnect(id);
+        for (const [actor, ids] of record.childSignals) {
+            for (const id of ids)
+                actor.disconnect(id);
+        }
+        record.childSignals.clear();
         this._clearClone(record);
     }
 

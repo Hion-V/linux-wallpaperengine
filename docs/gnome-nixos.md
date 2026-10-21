@@ -147,18 +147,18 @@ Current limitations:
 
 ## Blur My Shell
 
-With Blur My Shell v72 enabled, its Activities backdrop also uses the live
-wallpaper. The bridge supplies each monitor's wallpaper inside Blur My Shell's
-existing overview effect widget, so your blur pipeline, brightness, and other
-effect settings still apply. No Blur My Shell files or settings are changed.
+With Blur My Shell v72 and newer enabled, its Activities backdrop also uses the
+live wallpaper. The bridge supplies each monitor's wallpaper inside Blur My
+Shell's existing overview effect widget, so your blur pipeline, brightness, and
+other effect settings still apply. No Blur My Shell files or settings are changed.
 
 The integration handles either extension being enabled first, pipeline/background
 recreation, and renderer restarts. Removing a wallpaper or disabling the bridge
 reveals Blur My Shell's original image background again. If Blur My Shell is not
 installed or its overview blur is disabled, the adapter does nothing.
 
-This adapter targets the actor structure used by v72; future Blur My Shell
-versions may need compatibility updates. Only its Activities backdrop is covered,
+The adapter supports both the v72 layout and the nested pipeline source used by
+v73 and newer. Only its Activities backdrop is covered,
 not its separate panel, lock-screen, or workspace-switch animation backgrounds.
 Blurring live frames uses more GPU time while Activities is visible than blurring
 a static image.

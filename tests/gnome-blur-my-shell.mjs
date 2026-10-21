@@ -64,12 +64,19 @@ function setup() {
             callbacks.forEach(fn => fn());
         }
     }
-    function addGroup() {
+    function addGroup(nested = false) {
         const group = new Actor({name: 'bms-overview-backgroundgroup'});
         root.add_child(group);
         for (const monitor of [0, 1]) {
             const widget = new Actor({name: 'bms-overview-blurred-widget', effects: ['blur', 'brightness']});
-            widget.add_child(new BackgroundActor({monitor}));
+            if (nested) {
+                const source = new Actor({name: 'bms-overview-blurred-widget-source'});
+                source.add_child(new BackgroundActor({monitor}));
+                widget.add_child(source);
+                widget.add_child(new Actor({source}));
+            } else {
+                widget.add_child(new BackgroundActor({monitor}));
+            }
             group.add_child(widget);
         }
         flush();
@@ -77,6 +84,28 @@ function setup() {
     }
     return {root, pending, sources, mirrors, flush, addGroup};
 }
+
+test('finds v73+ backgrounds nested in the pipeline source container', () => {
+    const t = setup();
+    const wallpaper = new Actor(); t.sources.set(1, wallpaper);
+    const group = t.addGroup(true);
+    const widget = group.children[1];
+    const record = t.mirrors._widgets.get(widget);
+    assert.equal(record.clone.source, wallpaper);
+    assert.deepEqual(record.clone.size, [1024, 768]);
+    assert.equal(widget.children.at(-1), record.clone);
+
+    const pipelineSource = widget.children[0];
+    pipelineSource.children[0].destroy();
+    pipelineSource.add_child(new BackgroundActor({monitor: 0}));
+    t.flush();
+    assert.equal(record.clone, null);
+    t.sources.set(0, wallpaper); t.mirrors.refresh();
+    assert.ok(record.clone);
+    assert.deepEqual(record.clone.size, [1920, 1080]);
+    t.mirrors.destroy();
+    assert.equal(pipelineSource.signals.size, 0);
+});
 
 test('does nothing without BMS; late enable adds live sources under existing blur effects', () => {
     const t = setup();

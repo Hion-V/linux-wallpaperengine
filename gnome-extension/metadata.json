@@ -9,7 +9,7 @@
     "user",
     "unlock-dialog"
   ],
-  "version": 5,
+  "version": 6,
   "url": "https://github.com/Almamu/linux-wallpaperengine",
   "settings-schema": "org.gnome.shell.extensions.linux-wallpaperengine"
 }
